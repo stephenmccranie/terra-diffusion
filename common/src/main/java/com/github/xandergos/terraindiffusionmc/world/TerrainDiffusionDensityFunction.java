@@ -96,6 +96,11 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
     private final boolean caves;
 
+    // One immutable tile per worker, shared by density-function instances on that worker.
+    // fillArray already amortizes shared-cache access over a tile; compute must do so too.
+    private static final ThreadLocal<TileCursor> WORKER_TILE =
+            ThreadLocal.withInitial(TileCursor::new);
+
     public TerrainDiffusionDensityFunction(Boolean caves) {
         this.caves = caves == null || caves;
     }
@@ -106,27 +111,16 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         int z = pos.blockZ();
         int y = pos.blockY();
 
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-        int tileX = x >> tileShift;
-        int tileZ = z >> tileShift;
-
-        int blockStartX = tileX << tileShift;
-        int blockStartZ = tileZ << tileShift;
-
-        int blockEndX = blockStartX + tileSize;
-        int blockEndZ = blockStartZ + tileSize;
-
-        HeightmapData data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
+        TileCursor ctx = WORKER_TILE.get();
+        ctx.update(x, z);
+        HeightmapData data = ctx.data;
 
         if (data == null || data.heightmap == null) {
             return 0.0;
         }
 
-        int localX = Math.max(0, Math.min(data.width - 1, x - blockStartX));
-        int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
+        int localX = Math.max(0, Math.min(data.width - 1, x - ctx.blockStartX));
+        int localZ = Math.max(0, Math.min(data.height - 1, z - ctx.blockStartZ));
 
         int targetHeight = HeightConverter.convertToMinecraftHeight(
                 data.heightmap[localZ][localX]
@@ -140,17 +134,27 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
                 sideSurface(data)[localZ * data.width + localX] - y, localX, localZ) : terrain;
     }
 
-    private static final class FillContext {
+    private static final class TileCursor {
         int blockStartX, blockStartZ, blockEndX, blockEndZ;
+        int generation = -1;
+        int tileSize;
+        int scale;
         HeightmapData data;
 
         void update(int x, int z) {
-            if (x < blockStartX || x >= blockEndX) this.init(x, z);
-            if (z < blockStartZ || z >= blockEndZ) this.init(x, z);
+            if (data == null || generation != LocalTerrainProvider.generation()
+                    || tileSize != TerrainDiffusionConfig.tileSize()
+                    || scale != WorldScaleManager.getCurrentScale()
+                    || x < blockStartX || x >= blockEndX
+                    || z < blockStartZ || z >= blockEndZ) this.init(x, z);
         }
 
         void init(int x, int z) {
-            int tileSize = TerrainDiffusionConfig.tileSize();
+            // A failed fetch must not leave the previous tile in the worker cursor.
+            this.data = null;
+            this.generation = LocalTerrainProvider.generation();
+            this.tileSize = TerrainDiffusionConfig.tileSize();
+            this.scale = WorldScaleManager.getCurrentScale();
             int tileShift = Integer.numberOfTrailingZeros(tileSize);
 
             int tileX = x >> tileShift;
@@ -170,7 +174,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
     public void fillArray(double[] densities, DensityFunction.ContextProvider applier) {
         if (densities.length == 0) return;
 
-        FillContext ctx = new FillContext();
+        TileCursor ctx = new TileCursor();
         DensityFunction.FunctionContext pos = applier.forIndex(0);
         int x = pos.blockX();
         int z = pos.blockZ();

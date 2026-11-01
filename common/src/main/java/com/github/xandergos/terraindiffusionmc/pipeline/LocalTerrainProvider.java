@@ -217,16 +217,17 @@ public final class LocalTerrainProvider {
         return INSTANCE;
     }
 
-    public static void clearCache() {
+    public static synchronized void clearCache() {
         CACHE.clear();
         PENDING.clear();
+        worldGeneration++;
     }
 
     public static long getSeed() {
         return instanceSeed;
     }
 
-    // Changes on every world load, so position-keyed caches know to refill
+    // Changes on every world load and explicit clear, so position-keyed caches refill.
     public static int generation() {
         return worldGeneration;
     }
