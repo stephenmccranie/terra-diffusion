@@ -98,8 +98,8 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
     // One immutable tile per worker, shared by density-function instances on that worker.
     // fillArray already amortizes shared-cache access over a tile; compute must do so too.
-    private static final ThreadLocal<TileCursor> WORKER_TILE =
-            ThreadLocal.withInitial(TileCursor::new);
+    private static final ThreadLocal<FillContext> WORKER_TILE =
+            ThreadLocal.withInitial(FillContext::new);
 
     public TerrainDiffusionDensityFunction(Boolean caves) {
         this.caves = caves == null || caves;
@@ -111,7 +111,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         int z = pos.blockZ();
         int y = pos.blockY();
 
-        TileCursor ctx = WORKER_TILE.get();
+        FillContext ctx = WORKER_TILE.get();
         ctx.update(x, z);
         HeightmapData data = ctx.data;
 
@@ -134,11 +134,9 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
                 sideSurface(data)[localZ * data.width + localX] - y, localX, localZ) : terrain;
     }
 
-    private static final class TileCursor {
+    private static final class FillContext {
         int blockStartX, blockStartZ, blockEndX, blockEndZ;
-        int generation = -1;
-        int tileSize;
-        int scale;
+        int generation, tileSize, scale;
         HeightmapData data;
 
         void update(int x, int z) {
@@ -174,7 +172,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
     public void fillArray(double[] densities, DensityFunction.ContextProvider applier) {
         if (densities.length == 0) return;
 
-        TileCursor ctx = new TileCursor();
+        FillContext ctx = new FillContext();
         DensityFunction.FunctionContext pos = applier.forIndex(0);
         int x = pos.blockX();
         int z = pos.blockZ();
