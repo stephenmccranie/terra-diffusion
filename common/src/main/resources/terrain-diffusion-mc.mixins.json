@@ -8,6 +8,7 @@
     "BeardifierAccessor",
     "BiomeMixin",
     "BiomeManagerJitterMixin",
+    "ChunkGeneratorStructureStateMixin",
     "HolderReferenceAccessor",
     "MinecraftServerMixin",
     "NoiseBasedChunkGeneratorAccessor",
