@@ -26,8 +26,15 @@ public class NoiseBasedChunkGeneratorFluidMixin {
             CallbackInfoReturnable<Aquifer.FluidPicker> cir) {
 
         DensityFunction density = settings.noiseRouter().finalDensity();
-        while (density instanceof DensityFunctions.HolderHolder holder) {
-            density = holder.function().value();
+        // Cache markers preserve the underlying function, including its fluid policy.
+        while (true) {
+            if (density instanceof DensityFunctions.HolderHolder holder) {
+                density = holder.function().value();
+            } else if (density instanceof DensityFunctions.MarkerOrMarked marker) {
+                density = marker.wrapped();
+            } else {
+                break;
+            }
         }
         if (!(density instanceof TerrainDiffusionDensityFunction)) {
             return;

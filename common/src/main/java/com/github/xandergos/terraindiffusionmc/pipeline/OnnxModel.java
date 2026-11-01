@@ -300,7 +300,7 @@ public final class OnnxModel implements AutoCloseable {
                 + " after " + GPU_SESSION_ATTEMPTS + " attempts", lastFailure);
     }
 
-    private static void addGpuProvider(OrtSession.SessionOptions opts) throws OrtException {
+    private void addGpuProvider(OrtSession.SessionOptions opts) throws OrtException {
         boolean gpuRequired = "gpu".equals(TerrainDiffusionConfig.inferenceDevice());
         boolean added = false;
 
@@ -325,6 +325,11 @@ public final class OnnxModel implements AutoCloseable {
         if (!added) {
             try {
                 opts.addDirectML(0);
+                if ("decoder".equals(name)) {
+                    opts.setSymbolicDimensionValue("batch", 1);
+                    opts.setSymbolicDimensionValue("height", WorldPipeline.DECODER_TILE_SIZE);
+                    opts.setSymbolicDimensionValue("width", WorldPipeline.DECODER_TILE_SIZE);
+                }
                 added = true;
                 setResolvedProviderOnce("DirectML");
             } catch (Throwable t) {
