@@ -7,10 +7,12 @@
   "mixins": [
     "BeardifierAccessor",
     "BiomeMixin",
+    "BiomeManagerJitterMixin",
     "HolderReferenceAccessor",
     "MinecraftServerMixin",
     "NoiseBasedChunkGeneratorAccessor",
     "NoiseBasedChunkGeneratorBeardifierMixin",
+    "NoiseBasedChunkGeneratorCeilingMixin",
     "NoiseBasedChunkGeneratorFluidMixin",
     "SnowAndFreezeFeatureMixin",
     "StructureMixin"

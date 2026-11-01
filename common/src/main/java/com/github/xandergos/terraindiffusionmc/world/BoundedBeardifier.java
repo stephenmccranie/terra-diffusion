@@ -66,4 +66,8 @@ public final class BoundedBeardifier extends Beardifier {
         if (x < minX || x > maxX || z < minZ || z > maxZ) return 0.0;
         return super.compute(pos);
     }
+
+    public long maxInfluenceY() {
+        return maxY;
+    }
 }
