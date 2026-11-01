@@ -5,11 +5,15 @@
   "refmap": "${mod_id}.refmap.json",
   "compatibilityLevel": "JAVA_21",
   "mixins": [
+    "BeardifierAccessor",
     "BiomeMixin",
+    "BiomeManagerJitterMixin",
     "ChunkGeneratorStructureStateMixin",
     "HolderReferenceAccessor",
     "MinecraftServerMixin",
     "NoiseBasedChunkGeneratorAccessor",
+    "NoiseBasedChunkGeneratorBeardifierMixin",
+    "NoiseBasedChunkGeneratorCeilingMixin",
     "NoiseBasedChunkGeneratorFluidMixin",
     "SnowAndFreezeFeatureMixin",
     "StructureMixin"
