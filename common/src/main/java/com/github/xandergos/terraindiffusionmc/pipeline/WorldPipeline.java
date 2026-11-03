@@ -24,6 +24,14 @@ public final class WorldPipeline implements AutoCloseable {
     static final int LATENT_COMPRESSION = WorldPipelineModelConfig.latentCompression();
     static final float SIGMA_DATA = EDMScheduler.SIGMA_DATA;
 
+    // Mountains rise above the model's real-world heights to fill the world's height budget, which assumes a
+    // 10,000 m peak. Land below RELIEF_FROM_M keeps its height, so coasts, rivers and farmland stay put; the gain
+    // ramps up to RELIEF_GAIN by RELIEF_FULL_M, and heights ease towards RELIEF_CEILING_M without reaching it.
+    private static final float RELIEF_FROM_M = 300f;
+    private static final float RELIEF_FULL_M = 1200f;
+    private static final float RELIEF_GAIN = 2.5f;
+    private static final float RELIEF_CEILING_M = 9800f;
+
     static final int COARSE_TILE_SIZE   = 64;
     static final int COARSE_TILE_STRIDE = 48;
     static final int LATENT_TILE_SIZE   = 64;
@@ -475,7 +483,9 @@ public final class WorldPipeline implements AutoCloseable {
     public float[][] get(int i1, int j1, int i2, int j2, boolean withClimate) {
         float[] elevFlat = computeElev(i1, j1, i2, j2);
         int H = i2 - i1, W = j2 - j1;
+        // Temperature follows the model's own heights, so raised mountains keep its snow lines and climate
         float[] climate = withClimate ? computeClimate(i1, j1, i2, j2, elevFlat, H, W) : null;
+        for (int k = 0; k < elevFlat.length; k++) elevFlat[k] = relief(elevFlat[k]);
         return new float[][]{elevFlat, climate};
     }
 
@@ -527,6 +537,17 @@ public final class WorldPipeline implements AutoCloseable {
                 flat[r * W + c] = (float) (Math.signum(es) * es * es);
             }
         return flat;
+    }
+
+    // The world height of a model elevation; smooth and rising everywhere, unchanged below RELIEF_FROM_M
+    static float relief(float m) {
+        if (m <= RELIEF_FROM_M) return m;
+        float ramp = RELIEF_FULL_M - RELIEF_FROM_M;
+        float t = Math.min(m, RELIEF_FULL_M) - RELIEF_FROM_M;
+        float lifted = m - RELIEF_FROM_M
+                + (RELIEF_GAIN - 1f) * (t * t / (2f * ramp) + Math.max(0f, m - RELIEF_FULL_M));
+        float room = RELIEF_CEILING_M - RELIEF_FROM_M;
+        return RELIEF_FROM_M + room * (float) Math.tanh(lifted / room);
     }
 
     private float[] computeClimate(int i1, int j1, int i2, int j2,

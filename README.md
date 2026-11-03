@@ -22,6 +22,8 @@ surface biomes, and pulls Terralith's surface rules in at world load. Details in
 
 **Rivers.** A dendric-propagating ocean-to-source approach inspired by [TerraFirmaCraft](https://github.com/TerraFirmaCraft/TerraFirmaCraft)'s river generation system. Using the terrain given by the model, rivers are post-processed on top of the region. Filled depressions are exactly level, and water crosses them towards where they drain and away from the ground rising around them, so it gathers into one channel instead of ruled parallel lines. Each 1,024-pixel river region is solved on its own window; where two regions disagree about a river, it fades out across the seam instead of ending in a wall.
 
+**Taller mountains.** The model learned real-world heights, so its peaks rarely pass 4,000 m while each world's height assumes a 10,000 m peak. Land below 300 m keeps the model's height, so coasts, rivers and farmland stay put; higher ground rises up to 2.5 times as fast and eases towards 9,800 m, so a 2,000 m range stands about 3,700 m tall and a 4,000 m one about 7,100 m. Temperature keeps the model's heights, so snow lines and climate stay where the model put them, while treelines and bare rock follow the raised ground.
+
 **Lakes** are made similar to rivers, filling depressions elegible for holding water to create deep and vast lakes, or small and contained depending on their area of generation.
 
 **Additional *additions***. I'm a big Create Mod fan, and usually play with [TFMG](https://github.com/DrMango14/Create-The_Factory_Must_Grow). Because `min_y` has been pinned at -192 for deeper oceans, oil wells have been placed at -189. 
