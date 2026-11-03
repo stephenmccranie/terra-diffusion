@@ -20,7 +20,7 @@ surface biomes, and pulls Terralith's surface rules in at world load. Details in
 
 **Snow mantle creation.** Vanilla lays one snow layer everywhere it snows. Here the depth comes from the terrain model's own temperature: 1–7 layers between −5 °C and −7.5 °C, then a full snow block plus another 1–7 layers down to −10 °C. Snow on a tree canopy also snows the ground underneath. If [Snow Real Magic](https://modrinth.com/mod/snow-real-magic) is installed, columns where it is keeping a plant alive get filled as well. 
 
-**Rivers.** A dendric-propagating ocean-to-source approach inspired by [TerraFirmaCraft](https://github.com/TerraFirmaCraft/TerraFirmaCraft)'s river generation system. Using the terrain given by the model, rivers are post-processed on top of the region. 
+**Rivers.** A dendric-propagating ocean-to-source approach inspired by [TerraFirmaCraft](https://github.com/TerraFirmaCraft/TerraFirmaCraft)'s river generation system. Using the terrain given by the model, rivers are post-processed on top of the region. Filled depressions are exactly level, and water crosses them towards where they drain and away from the ground rising around them, so it gathers into one channel instead of ruled parallel lines. Each 1,024-pixel river region is solved on its own window; where two regions disagree about a river, it fades out across the seam instead of ending in a wall.
 
 **Lakes** are made similar to rivers, filling depressions elegible for holding water to create deep and vast lakes, or small and contained depending on their area of generation.
 

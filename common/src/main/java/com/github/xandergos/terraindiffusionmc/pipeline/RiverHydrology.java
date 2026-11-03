@@ -134,14 +134,6 @@ public final class RiverHydrology {
 
     private static final float MAX_INFLUENCE_CELLS = 12f;
 
-    private static final float FILL_EPSILON_M = 1.0e-2f;
-
-    private static final float FLAT_DROP_M = 0.5f;
-
-    private static final float FLAT_TILT_MAX_M = 0.4f;
-
-    private static final float FLAT_GRADIENT_M = 1.0e-3f;
-
     private static final int[] FACET_CR = { 0, -1, -1, 0, 0, 1, 1, 0};
     private static final int[] FACET_CC = { 1, 0, 0, -1, -1, 0, 0, 1};
     private static final int[] FACET_DR = {-1, -1, -1, -1, 1, 1, 1, 1};
@@ -345,7 +337,7 @@ public final class RiverHydrology {
         int ri = Math.floorDiv((int) Math.floor(nativeI), REGION_PX);
         int rj = Math.floorDiv((int) Math.floor(nativeJ), REGION_PX);
         float[] own = sampleFrom(pipeline, ri, rj, nativeI, nativeJ, blockM);
-        if (own == null || SEAM_BLEND_CELLS <= 0) {
+        if (SEAM_BLEND_CELLS <= 0) {
             return own;
         }
 
@@ -370,15 +362,25 @@ public final class RiverHydrology {
             return own;
         }
         float[] other = sampleFrom(pipeline, ni, nj, nativeI, nativeJ, blockM);
-        if (other == null) {
-            return own;
+        if (own == null && other == null) {
+            return null;
         }
+        // A river only one region has fades out across the seam instead of ending at it
+        if (own == null) own = beyondReach(other);
+        if (other == null) other = beyondReach(own);
 
         float wOther = 0.5f * (1f - dist / SEAM_BLEND_CELLS);
         for (int k = 0; k < own.length; k++) {
             own[k] = own[k] + (other[k] - own[k]) * wOther;
         }
         return own;
+    }
+
+    // A channel sample moved to the edge of a river's influence, where it no longer shapes the ground
+    private static float[] beyondReach(float[] sample) {
+        float[] far = sample.clone();
+        far[0] = MAX_INFLUENCE_CELLS * DOWNSAMPLE;
+        return far;
     }
 
     private static float[] sampleFrom(WorldPipeline pipeline, int regionI, int regionJ,
@@ -2432,9 +2434,7 @@ public final class RiverHydrology {
                 int j = rr * GRID + cc;
                 if (closed[j]) continue;
                 closed[j] = true;
-                if (filled[j] <= filled[i]) {
-                    filled[j] = filled[i] + FILL_EPSILON_M;
-                }
+                filled[j] = Math.max(filled[j], filled[i]);
                 open.push(pack(filled[j], j));
             }
         }
@@ -2442,55 +2442,71 @@ public final class RiverHydrology {
         phase("  flood");
         int[] nr8 = {-1, -1, -1, 0, 0, 1, 1, 1}, nc8 = {-1, 0, 1, -1, 1, -1, 0, 1};
 
-        float[] toOutlet = new float[n];
-        Arrays.fill(toOutlet, -1f);
-        int[] flatQueue = new int[n];
-        int flatHead = 0, flatTail = 0;
-
+        // Filling leaves every depression exactly level. A level cell with no lower neighbour finds its way off
+        // by a lift compared only between cells of equal height: lower towards where the level drains and, half
+        // as strongly, higher near the ground rising above it, so water gathers along the middle of a level
+        // instead of running in parallel lines (Garbrecht and Martz 1997; Barnes, Lehman and Mulla 2014).
+        // Distances are octile, so the lift has no square contours to channel water along the grid's axes.
+        boolean[] flat = new boolean[n];
         for (int i = 0; i < n; i++) {
             int r = i / GRID, c = i % GRID;
-            if (r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
+            if (elev[i] < 0f || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
                 continue;
             }
+            flat[i] = true;
             for (int k = 0; k < 8; k++) {
-                if (filled[i] - filled[(r + nr8[k]) * GRID + (c + nc8[k])] > FLAT_DROP_M) {
-                    toOutlet[i] = 0f;
-                    flatQueue[flatTail++] = i;
+                if (filled[(r + nr8[k]) * GRID + (c + nc8[k])] < filled[i]) {
+                    flat[i] = false;
                     break;
                 }
             }
         }
-
-        while (flatHead < flatTail) {
-            int i = flatQueue[flatHead++];
+        float[] toOutlet = new float[n];
+        float[] fromHigh = new float[n];
+        Arrays.fill(toOutlet, -1f);
+        Arrays.fill(fromHigh, -1f);
+        LongHeap towardsLow = new LongHeap(n), awayFromHigh = new LongHeap(n);
+        for (int i = 0; i < n; i++) {
             int r = i / GRID, c = i % GRID;
             for (int k = 0; k < 8; k++) {
                 int rr = r + nr8[k], cc = c + nc8[k];
-                if (rr < 1 || cc < 1 || rr >= GRID - 1 || cc >= GRID - 1) {
-                    continue;
-                }
+                if (rr < 0 || cc < 0 || rr >= GRID || cc >= GRID) continue;
                 int j = rr * GRID + cc;
-                if (toOutlet[j] >= 0f) {
-                    continue;
+                // A level drains through any equal cell that is not itself flat: a slope's top or an outlet
+                if (!flat[i] && flat[j] && filled[j] == filled[i] && toOutlet[i] < 0f) {
+                    toOutlet[i] = 0f;
+                    towardsLow.push(pack(0f, i));
                 }
-                toOutlet[j] = toOutlet[i] + 1f;
-                flatQueue[flatTail++] = j;
+                if (flat[i] && filled[j] > filled[i] && fromHigh[i] < 0f) {
+                    fromHigh[i] = 0f;
+                    awayFromHigh.push(pack(0f, i));
+                }
             }
         }
+        spreadAcrossLevel(towardsLow, toOutlet, flat, filled);
+        spreadAcrossLevel(awayFromHigh, fromHigh, flat, filled);
 
+        int[] level = labelLevels(flat, filled);
+        int levels = 0;
+        for (int i = 0; i < n; i++) levels = Math.max(levels, level[i] + 1);
+        float[] highest = new float[levels];
         for (int i = 0; i < n; i++) {
-            if (toOutlet[i] > 0f) {
-
-                float n01 = 0.5f + 0.5f * ROUTING_DETAIL.GetNoise(
-                        (windowJ + i % GRID) * (float) DOWNSAMPLE,
-                        (windowI + i / GRID) * (float) DOWNSAMPLE);
-                filled[i] += Math.min(FLAT_GRADIENT_M * (toOutlet[i] + n01), FLAT_TILT_MAX_M);
-            }
+            if (flat[i]) highest[level[i]] = Math.max(highest[level[i]], fromHigh[i]);
+        }
+        float[] lift = new float[n];
+        for (int i = 0; i < n; i++) {
+            if (!flat[i] || toOutlet[i] < 0f) continue;
+            float away = fromHigh[i] < 0f ? 0f : highest[level[i]] - fromHigh[i];
+            float n01 = 0.5f + 0.5f * ROUTING_DETAIL.GetNoise(
+                    (windowJ + i % GRID) * (float) DOWNSAMPLE,
+                    (windowI + i / GRID) * (float) DOWNSAMPLE);
+            lift[i] = 2f * toOutlet[i] + away + n01;
         }
 
         int noDescentReported = 0;
         phase("  flatBFS");
         int[] ascending = orderBy(filled, n);
+        breakTies(ascending, filled, lift);
         phase("  orderBy");
 
         float[] acc = new float[n];
@@ -2526,15 +2542,15 @@ public final class RiverHydrology {
             for (int f = 0; f < 8; f++) {
                 int cardinal = (r + FACET_CR[f]) * GRID + (c + FACET_CC[f]);
                 int diagonal = (r + FACET_DR[f]) * GRID + (c + FACET_DC[f]);
-                float s1 = filled[i] - filled[cardinal];
-                float s2 = filled[cardinal] - filled[diagonal];
+                float s1 = fall(filled, lift, flat[i], i, cardinal);
+                float s2 = fall(filled, lift, flat[i], cardinal, diagonal);
                 float mag;
                 int clamp;
                 if (s2 < 0f) {
                     mag = s1;
                     clamp = -1;
                 } else if ((s1 <= 0f && !(s1 == 0f && s2 == 0f)) || s2 > s1) {
-                    mag = (filled[i] - filled[diagonal]) / 1.41421f;
+                    mag = fall(filled, lift, flat[i], i, diagonal) / 1.41421f;
                     clamp = 1;
                 } else {
                     mag = (float) Math.sqrt(s1 * s1 + s2 * s2);
@@ -2582,6 +2598,80 @@ public final class RiverHydrology {
         phase("  dinfRouting");
         for (int i = 0; i < n; i++) fillDepthOut[i] = filled[i] - elev[i];
         return acc;
+    }
+
+    // How far water falls from cell a to cell b, as seen from a flat cell or not: across a level only the
+    // lift tells cells apart
+    private static float fall(float[] filled, float[] lift, boolean fromFlat, int a, int b) {
+        return fromFlat && filled[a] == filled[b] ? lift[a] - lift[b] : filled[a] - filled[b];
+    }
+
+    // Orders cells of equal height by lift, so each level is visited from its high side down
+    private static void breakTies(int[] order, float[] filled, float[] lift) {
+        for (int start = 0; start < order.length; ) {
+            int end = start + 1;
+            while (end < order.length && filled[order[end]] == filled[order[start]]) end++;
+            if (end - start > 1) {
+                long[] run = new long[end - start];
+                for (int k = start; k < end; k++) run[k - start] = pack(lift[order[k]], order[k]);
+                Arrays.sort(run);
+                for (int k = start; k < end; k++) order[k] = (int) run[k - start];
+            }
+            start = end;
+        }
+    }
+
+    // Octile distance across a level's flat cells from the cells queued in open, which hold distance 0
+    private static void spreadAcrossLevel(LongHeap open, float[] dist, boolean[] flat, float[] filled) {
+        boolean[] settled = new boolean[dist.length];
+        while (!open.isEmpty()) {
+            int i = (int) open.pop();
+            if (settled[i]) continue;
+            settled[i] = true;
+            int r = i / GRID, c = i % GRID;
+            for (int dr = -1; dr <= 1; dr++) {
+                for (int dc = -1; dc <= 1; dc++) {
+                    int rr = r + dr, cc = c + dc;
+                    if ((dr == 0 && dc == 0) || rr < 0 || cc < 0 || rr >= GRID || cc >= GRID) continue;
+                    int j = rr * GRID + cc;
+                    if (!flat[j] || filled[j] != filled[i]) continue;
+                    float d = dist[i] + (dr != 0 && dc != 0 ? 1.41421f : 1f);
+                    if (dist[j] < 0f || d < dist[j]) {
+                        dist[j] = d;
+                        open.push(pack(d, j));
+                    }
+                }
+            }
+        }
+    }
+
+    // Numbers each 8-connected group of flat cells of one height; -1 elsewhere
+    private static int[] labelLevels(boolean[] flat, float[] filled) {
+        int[] label = new int[flat.length];
+        Arrays.fill(label, -1);
+        int[] stack = new int[flat.length];
+        int next = 0;
+        for (int start = 0; start < flat.length; start++) {
+            if (!flat[start] || label[start] >= 0) continue;
+            int top = 0;
+            stack[top++] = start;
+            label[start] = next;
+            while (top > 0) {
+                int i = stack[--top];
+                int r = i / GRID, c = i % GRID;
+                for (int dr = -1; dr <= 1; dr++) {
+                    for (int dc = -1; dc <= 1; dc++) {
+                        int j = (r + dr) * GRID + (c + dc);
+                        if (flat[j] && label[j] < 0 && filled[j] == filled[i]) {
+                            label[j] = next;
+                            stack[top++] = j;
+                        }
+                    }
+                }
+            }
+            next++;
+        }
+        return label;
     }
 
     private static void edt2d(float[] f, int w, int h) {
