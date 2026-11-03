@@ -13,15 +13,11 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Random;
 import java.util.Comparator;
-import java.util.concurrent.Callable;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.function.BooleanSupplier;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Future;
-import java.util.concurrent.PriorityBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.FutureTask;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class LocalTerrainProvider {
@@ -100,7 +96,8 @@ public final class LocalTerrainProvider {
     }
 
     private static record CacheKey(int i1, int j1, int i2, int j2) {}
-    private static record CacheEntry(HeightmapData data, AtomicLong lastAccessed) {}
+    // A tile is computed once, by the first thread to need it; later callers wait for that computation
+    private static record CacheEntry(CompletableFuture<HeightmapData> data, AtomicLong lastAccessed) {}
 
     // Blocks of area to keep cached, so tile size does not decide the size of the working set
     private static final long CACHE_AREA_BLOCKS =
@@ -109,51 +106,6 @@ public final class LocalTerrainProvider {
     private static volatile int maxCacheSize;
     private static final Map<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
     private static final AtomicLong CACHE_CLOCK = new AtomicLong();
-    private static final Map<CacheKey, Future<HeightmapData>> PENDING = new ConcurrentHashMap<>();
-
-    // The main thread is stalled, so the game is visibly frozen until this tile lands
-    private static final int PRIORITY_URGENT = 0;
-    private static final int PRIORITY_BLOCKING = 5;
-    // Explorer water runs only when nothing else is waiting
-    private static final int PRIORITY_BACKGROUND = 10;
-    // Stops speculative work from growing without bound if the player outruns the generator
-    private static final AtomicLong TASK_SEQ = new AtomicLong();
-
-    // Ordered by priority so a caller waiting on a tile is served before speculative work
-    private static final ThreadPoolExecutor INFERENCE_EXECUTOR = new ThreadPoolExecutor(
-            1, 1, 0L, TimeUnit.MILLISECONDS,
-            new PriorityBlockingQueue<Runnable>(),
-            r -> {
-                Thread t = new Thread(r, "terrain-diffusion-inference");
-                t.setDaemon(true);
-                return t;
-            });
-
-    private static final class PriorityTask<T> extends FutureTask<T>
-            implements Comparable<PriorityTask<?>> {
-        private volatile int priority;
-        private final long seq = TASK_SEQ.incrementAndGet();
-
-        PriorityTask(Callable<T> task, int priority) {
-            super(task);
-            this.priority = priority;
-        }
-
-        @Override
-        public int compareTo(PriorityTask<?> other) {
-            int byPriority = Integer.compare(priority, other.priority);
-            return byPriority != 0 ? byPriority : Long.compare(seq, other.seq);
-        }
-    }
-
-    // Lifts a queued task to a higher priority
-    private static void raisePriority(PriorityTask<?> task, int priority) {
-        if (task.priority <= priority) return;
-        if (INFERENCE_EXECUTOR.getQueue().remove(task)) {
-            task.priority = priority;
-            INFERENCE_EXECUTOR.execute(task);
-        }
-    }
 
     private static int maxCacheSize() {
         int cached = maxCacheSize;
@@ -200,7 +152,6 @@ public final class LocalTerrainProvider {
             INSTANCE.pipeline.setSeed(seed);
             instanceSeed = seed;
             CACHE.clear();
-            PENDING.clear();
         }
         worldGeneration++;
     }
@@ -219,7 +170,6 @@ public final class LocalTerrainProvider {
 
     public static void clearCache() {
         CACHE.clear();
-        PENDING.clear();
     }
 
     public static long getSeed() {
@@ -251,15 +201,15 @@ public final class LocalTerrainProvider {
         return explorerGeneration == worldGeneration ? explorerSeed : instanceSeed;
     }
 
-    public static void setExplorerSeed(long newSeed) throws Exception {
-        submitToInferenceThread(() -> {
+    public static void setExplorerSeed(long newSeed) {
+        WorldPipeline.INFERENCE.call(() -> {
             explorer().pipeline.setSeed(newSeed);
             explorerSeed = newSeed;
             return null;
         });
     }
 
-    public static long randomExplorerSeed() throws Exception {
+    public static long randomExplorerSeed() {
         long newSeed = new Random().nextLong();
         setExplorerSeed(newSeed);
         return newSeed;
@@ -267,22 +217,22 @@ public final class LocalTerrainProvider {
 
     // Frees the explorer's pipeline; the next explorer request rebuilds it on the world's seed
     public static void releaseExplorer() {
-        INFERENCE_EXECUTOR.execute(new PriorityTask<Void>(() -> {
+        WorldPipeline.INFERENCE.submit(() -> {
             if (EXPLORER != null) {
                 EXPLORER.pipeline.close();
                 EXPLORER = null;
             }
             explorerGeneration = -1;
             return null;
-        }, PRIORITY_BLOCKING));
+        }, PriorityExecutor.BLOCKING);
     }
 
-    public static float[][] explorerData(int i1, int j1, int i2, int j2, boolean withClimate) throws Exception {
-        return submitToInferenceThread(() -> explorer().pipeline.get(i1, j1, i2, j2, withClimate));
+    public static float[][] explorerData(int i1, int j1, int i2, int j2, boolean withClimate) {
+        return WorldPipeline.INFERENCE.call(() -> explorer().pipeline.get(i1, j1, i2, j2, withClimate));
     }
 
-    public static FloatTensor explorerCoarse(int ci0, int cj0, int ci1, int cj1) throws Exception {
-        return submitToInferenceThread(() -> explorer().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
+    public static FloatTensor explorerCoarse(int ci0, int cj0, int ci1, int cj1) {
+        return WorldPipeline.INFERENCE.call(() -> explorer().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
     }
 
     // The explorer view most recently asked for; water for any other view is abandoned
@@ -293,7 +243,7 @@ public final class LocalTerrainProvider {
     // Returns {bed elevation, water surface} for an explorer view, or null if the view changed first
     public static float[][] explorerWater(int i1, int j1, int i2, int j2, String view) throws Exception {
         BooleanSupplier stale = () -> !view.equals(explorerView);
-        PriorityTask<float[][]> task = new PriorityTask<>(() -> {
+        return WorldPipeline.INFERENCE.submit(() -> {
             if (stale.getAsBoolean()) return null;
             try {
                 return InfiniteTensor.cancellable(stale, () -> {
@@ -308,85 +258,50 @@ public final class LocalTerrainProvider {
             } catch (CancellationException e) {
                 return null;
             }
-        }, PRIORITY_BACKGROUND);
-        INFERENCE_EXECUTOR.execute(task);
-        return task.get();
+        }, PriorityExecutor.BACKGROUND).get();
     }
 
-    public static FloatTensor getPipelineCoarse(int ci0, int cj0, int ci1, int cj1) throws Exception {
-        return submitToInferenceThread(() -> getInstance().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
-    }
-
-    private static <T> T submitToInferenceThread(Callable<T> task) throws Exception {
-        PriorityTask<T> prioritised = new PriorityTask<>(task, PRIORITY_BLOCKING);
-        INFERENCE_EXECUTOR.execute(prioritised);
-        return prioritised.get();
+    public static FloatTensor getPipelineCoarse(int ci0, int cj0, int ci1, int cj1) {
+        return getInstance().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1);
     }
 
     public HeightmapData fetchHeightmap(int i1, int j1, int i2, int j2) {
         CacheKey key = new CacheKey(i1, j1, i2, j2);
-        CacheEntry cached = CACHE.get(key);
-        if (cached != null) {
-            cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
-            return cached.data;
+        CacheEntry entry = CACHE.get(key);
+        if (entry == null) {
+            CacheEntry mine = new CacheEntry(new CompletableFuture<>(), new AtomicLong());
+            entry = CACHE.putIfAbsent(key, mine);
+            if (entry == null) {
+                entry = mine;
+                generate(key, mine);
+                evictLruTo(maxCacheSize());
+            }
         }
-
-        return this.genHeightmap(key, i1, j1, i2, j2);
-    }
-
-    // A stalled main thread outranks a chunk worker
-    private static int waitingPriority() {
-        String thread = Thread.currentThread().getName();
-        return thread.equals("Server thread") || thread.equals("Render thread")
-                ? PRIORITY_URGENT
-                : PRIORITY_BLOCKING;
-    }
-
-    private HeightmapData genHeightmap(CacheKey key, int i1, int j1, int i2, int j2) {
-        PriorityTask<HeightmapData> toRun = enqueue(key, i1, j1, i2, j2, waitingPriority());
+        entry.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
         try {
-            return toRun.get();
-        } catch (Exception e) {
-            PENDING.remove(key);
-            throw new RuntimeException("Terrain tile failed: " + key, e);
+            return entry.data.join();
+        } catch (CompletionException e) {
+            throw new RuntimeException("Terrain tile failed: " + key, e.getCause());
         }
     }
 
-    // Queues a tile for generation if it is not cached or already queued, and returns the task
-    @SuppressWarnings("unchecked")
-    private PriorityTask<HeightmapData> enqueue(CacheKey key, int i1, int j1, int i2, int j2,
-                                                int priority) {
-        int scale = WorldScaleManager.getCurrentScale();
-        PriorityTask<HeightmapData> task = new PriorityTask<>(() -> {
-            long computedWindowCountBefore = pipeline.getTotalComputedWindowCount();
+    // Computes a tile on this thread; only its tensor reads run on the inference thread
+    private void generate(CacheKey key, CacheEntry entry) {
+        int i1 = key.i1(), j1 = key.j1(), i2 = key.i2(), j2 = key.j2();
+        try {
+            int scale = WorldScaleManager.getCurrentScale();
+            float blockM = NATIVE_RESOLUTION / scale;
             HeightmapData data = scale <= 1
                     ? handle1x(i1, j1, i2, j2)
                     : handleUpsampled(i1, j1, i2, j2, scale);
-            data.karst = RiverHydrology.karstAt(pipeline, i1 / (float) scale, j1 / (float) scale,
-                    NATIVE_RESOLUTION / scale);
-            long newlyComputedWindowCount =
-                    pipeline.getTotalComputedWindowCount() - computedWindowCountBefore;
-            if (newlyComputedWindowCount > 0) {
-                LOG.info(
-                        "Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
-                        OnnxModel.getResolvedInferenceProvider(), j2 - j1, i2 - i1,
-                        newlyComputedWindowCount);
-            }
-            CACHE.put(key, new CacheEntry(data, new AtomicLong(CACHE_CLOCK.incrementAndGet())));
-            evictLruTo(maxCacheSize());
-            PENDING.remove(key);
-            return data;
-        }, priority);
-
-        Future<HeightmapData> existing = PENDING.putIfAbsent(key, task);
-        if (existing != null) {
-            PriorityTask<HeightmapData> queued = (PriorityTask<HeightmapData>) existing;
-            raisePriority(queued, priority);
-            return queued;
+            data.karst = RiverHydrology.karstAt(pipeline, i1 / (float) scale, j1 / (float) scale, blockM);
+            RiverHydrology.prefetch(pipeline, Math.floorDiv(i1, scale), Math.floorDiv(j1, scale),
+                    Math.floorDiv(i2, scale), Math.floorDiv(j2, scale), blockM);
+            entry.data.complete(data);
+        } catch (Throwable e) {
+            CACHE.remove(key, entry);
+            entry.data.completeExceptionally(e);
         }
-
-        INFERENCE_EXECUTOR.execute(task);
-        return task;
     }
 
     private static void evictLruTo(int maxSize) {
@@ -1148,10 +1063,10 @@ public final class LocalTerrainProvider {
 
     public static HeightmapData peekHeightmap(int i1, int j1, int i2, int j2) {
         CacheEntry cached = CACHE.get(new CacheKey(i1, j1, i2, j2));
-        if (cached == null) {
+        if (cached == null || !cached.data.isDone() || cached.data.isCompletedExceptionally()) {
             return null;
         }
         cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
-        return cached.data;
+        return cached.data.join();
     }
 }

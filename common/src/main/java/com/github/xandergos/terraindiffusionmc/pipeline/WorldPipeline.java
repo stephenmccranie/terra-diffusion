@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -16,6 +17,9 @@ import com.github.xandergos.terraindiffusionmc.platform.PlatformPaths;
 public final class WorldPipeline implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(WorldPipeline.class);
+
+    // The one thread that owns the ONNX sessions and every pipeline's tensor caches
+    static final PriorityExecutor INFERENCE = new PriorityExecutor("terrain-diffusion-inference", 1);
 
     static final int LATENT_COMPRESSION = WorldPipelineModelConfig.latentCompression();
     static final float SIGMA_DATA = EDMScheduler.SIGMA_DATA;
@@ -123,11 +127,14 @@ public final class WorldPipeline implements AutoCloseable {
     public void setSeed(long newSeed) {
         long s = newSeed & 0xFFFFFFFFFFFFFFFFL;
         if (s == this.seed) return;
-        this.seed = s;
-        this.syntheticMapFactory = new SyntheticMapFactory(s);
-        tileStore.clearAllCaches();
-        hydrology.clear();
-        attachDiskCache();
+        INFERENCE.call(() -> {
+            this.seed = s;
+            this.syntheticMapFactory = new SyntheticMapFactory(s);
+            tileStore.clearAllCaches();
+            hydrology.clear();
+            attachDiskCache();
+            return null;
+        });
     }
 
     private InfiniteTensor buildCoarseStage() {
@@ -431,16 +438,30 @@ public final class WorldPipeline implements AutoCloseable {
         return tileStore.getTotalComputedWindowCount();
     }
 
+    // Runs tensor reads on the inference thread, reporting any windows they had to compute
+    private <T> T read(int height, int width, Callable<T> reads) {
+        return INFERENCE.call(() -> {
+            long before = tileStore.getTotalComputedWindowCount();
+            T slices = reads.call();
+            long computed = tileStore.getTotalComputedWindowCount() - before;
+            if (computed > 0) {
+                LOG.info("Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
+                        OnnxModel.getResolvedInferenceProvider(), width, height, computed);
+            }
+            return slices;
+        });
+    }
+
     // Returns a coarse tensor slice with shape [7, ci1-ci0, cj1-cj0]
     public FloatTensor getCoarseSlice(int ci0, int cj0, int ci1, int cj1) {
-        return coarse.getSlice(new int[]{0, ci0, cj0}, new int[]{7, ci1, cj1});
+        return read(ci1 - ci0, cj1 - cj0, () -> coarse.getSlice(new int[]{0, ci0, cj0}, new int[]{7, ci1, cj1}));
     }
 
     // Returns the latent stage's low-frequency elevation channel over a latent-pixel box,
     public float[] getLowfreqSlice(int li0, int lj0, int li1, int lj1) {
         int h = li1 - li0, w = lj1 - lj0;
         int px = h * w;
-        FloatTensor slice = latents.getSlice(new int[]{0, li0, lj0}, new int[]{6, li1, lj1});
+        FloatTensor slice = read(h, w, () -> latents.getSlice(new int[]{0, li0, lj0}, new int[]{6, li1, lj1}));
         float[] out = new float[px];
         for (int k = 0; k < px; k++) {
             float weight = slice.data[5 * px + k];
@@ -450,7 +471,7 @@ public final class WorldPipeline implements AutoCloseable {
         return out;
     }
 
-    // Get elevation and climate for a bounding box
+    // Get elevation and climate for a bounding box; only the tensor reads run on the inference thread
     public float[][] get(int i1, int j1, int i2, int j2, boolean withClimate) {
         float[] elevFlat = computeElev(i1, j1, i2, j2);
         int H = i2 - i1, W = j2 - j1;
@@ -472,8 +493,11 @@ public final class WorldPipeline implements AutoCloseable {
         int pj2 = -Math.floorDiv(-(j2 + padHr), lc) * lc;
         int pH = pi2 - pi1, pW = pj2 - pj1;
 
-        // Residual slice (2, pH, pW)
-        FloatTensor resSlice = residual.getSlice(new int[]{0, pi1, pj1}, new int[]{2, pi2, pj2});
+        // Residual slice (2, pH, pW) and latent slice (6, pH/lc, pW/lc)
+        FloatTensor[] slices = read(i2 - i1, j2 - j1, () -> new FloatTensor[]{
+                residual.getSlice(new int[]{0, pi1, pj1}, new int[]{2, pi2, pj2}),
+                latents.getSlice(new int[]{0, pi1 / lc, pj1 / lc}, new int[]{6, pi2 / lc, pj2 / lc})});
+        FloatTensor resSlice = slices[0];
         float[][] residualP = new float[pH][pW];
         for (int r = 0; r < pH; r++)
             for (int c = 0; c < pW; c++) {
@@ -482,10 +506,8 @@ public final class WorldPipeline implements AutoCloseable {
                 residualP[r][c] = v * RESIDUAL_STD + RESIDUAL_MEAN;
             }
 
-        // Latent slice (6, lH, lW)
         int lH = pH / lc, lW = pW / lc;
-        FloatTensor latSlice = latents.getSlice(
-                new int[]{0, pi1 / lc, pj1 / lc}, new int[]{6, pi2 / lc, pj2 / lc});
+        FloatTensor latSlice = slices[1];
         float[][] lowfreqP = new float[lH][lW];
         for (int r = 0; r < lH; r++)
             for (int c = 0; c < lW; c++) {
@@ -519,8 +541,8 @@ public final class WorldPipeline implements AutoCloseable {
 
         int win = 15, pad = (win - 1) / 2 + 1;
 
-        FloatTensor coarseSlice = coarse.getSlice(
-                new int[]{0, ci1 - pad, cj1 - pad}, new int[]{7, ci2 + pad, cj2 + pad});
+        FloatTensor coarseSlice = read(H, W, () -> coarse.getSlice(
+                new int[]{0, ci1 - pad, cj1 - pad}, new int[]{7, ci2 + pad, cj2 + pad}));
         int cH = ci2 + pad - (ci1 - pad);
         int cW = cj2 + pad - (cj1 - pad);
 
