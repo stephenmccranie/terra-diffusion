@@ -7,7 +7,11 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Map;
 import java.util.PriorityQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class RiverHydrology {
@@ -114,7 +118,8 @@ public final class RiverHydrology {
 
     private static final boolean TIMING = Boolean.getBoolean("terradiff.timing");
 
-    private static long PHASE_T0;
+    // Regions build concurrently, so each thread times its own build
+    private static final ThreadLocal<long[]> PHASE_T0 = ThreadLocal.withInitial(() -> new long[1]);
 
     private static void phase(String name) {
         InfiniteTensor.throwIfCancelled();
@@ -122,8 +127,9 @@ public final class RiverHydrology {
             return;
         }
         long now = System.nanoTime();
-        System.err.printf("diag phase %-16s %7.0f ms%n", name, (now - PHASE_T0) / 1.0e6);
-        PHASE_T0 = now;
+        long[] t0 = PHASE_T0.get();
+        System.err.printf("diag phase %-16s %7.0f ms%n", name, (now - t0[0]) / 1.0e6);
+        t0[0] = now;
     }
 
     private static final float MAX_INFLUENCE_CELLS = 12f;
@@ -259,13 +265,13 @@ public final class RiverHydrology {
     private static final float SEAM_BLEND_CELLS =
             Float.parseFloat(System.getProperty("terradiff.seamBlend", "24"));
 
-    private static final int MAX_CACHED_REGIONS = 6;
+    // A 3x3 neighbourhood, so regions prefetched ahead of generation do not evict the ones in use
+    private static final int MAX_CACHED_REGIONS = 9;
 
-    private static float[] ARC_POS;
-
-    // Hydrology regions built for one pipeline, least recently used evicted first
+    // Hydrology regions built for one pipeline, least recently used evicted first.
+    // A region is built once, by the first thread to need it; later callers wait for that build.
     public static final class RegionCache {
-        private final Map<Long, Region> regions = new ConcurrentHashMap<>();
+        private final Map<Long, CompletableFuture<Region>> regions = new ConcurrentHashMap<>();
         private final Map<Long, AtomicLong> used = new ConcurrentHashMap<>();
         private final AtomicLong clock = new AtomicLong();
         private boolean seamNeighbours = true;
@@ -291,6 +297,27 @@ public final class RiverHydrology {
             }
         }
     }
+
+    // Starts building, off the caller's thread, every region within a quarter region of the native
+    // rectangle that nobody has asked for yet, so it is ready before generation reaches it
+    public static void prefetch(WorldPipeline pipeline, int i0, int j0, int i1, int j1, float blockM) {
+        int lead = REGION_PX / 4;
+        int ri0 = Math.floorDiv(i0 - lead, REGION_PX), ri1 = Math.floorDiv(i1 + lead - 1, REGION_PX);
+        int rj0 = Math.floorDiv(j0 - lead, REGION_PX), rj1 = Math.floorDiv(j1 + lead - 1, REGION_PX);
+        for (int ri = ri0; ri <= ri1; ri++) {
+            for (int rj = rj0; rj <= rj1; rj++) {
+                claim(pipeline, ri, rj, blockM, PREFETCH);
+            }
+        }
+    }
+
+    // Its tensor reads queue behind any caller already waiting on the inference thread
+    static final String PREFETCH_THREAD = "terrain-diffusion-prefetch";
+    private static final ExecutorService PREFETCH = Executors.newFixedThreadPool(2, r -> {
+        Thread t = new Thread(r, PREFETCH_THREAD);
+        t.setDaemon(true);
+        return t;
+    });
 
     private RiverHydrology() {
     }
@@ -770,19 +797,34 @@ public final class RiverHydrology {
     }
 
     private static Region regionFor(WorldPipeline pipeline, int regionI, int regionJ, float blockM) {
+        return claim(pipeline, regionI, regionJ, blockM, Runnable::run).join();
+    }
+
+    // The region's build, started on the executor by whoever asks first and shared by everyone after
+    private static CompletableFuture<Region> claim(WorldPipeline pipeline, int regionI, int regionJ,
+                                                   float blockM, Executor executor) {
         RegionCache cache = pipeline.hydrology;
         long k = key(regionI, regionJ);
-        Region cached = cache.regions.get(k);
-        if (cached != null) {
-            cache.used.computeIfAbsent(k, x -> new AtomicLong()).set(cache.clock.incrementAndGet());
-            return cached;
+        cache.used.computeIfAbsent(k, x -> new AtomicLong()).set(cache.clock.incrementAndGet());
+        CompletableFuture<Region> region = cache.regions.get(k);
+        if (region != null) {
+            return region;
         }
-
-        Region built = build(pipeline, regionI, regionJ, blockM);
-        cache.regions.put(k, built);
-        cache.used.put(k, new AtomicLong(cache.clock.incrementAndGet()));
-        evict(cache);
-        return built;
+        CompletableFuture<Region> mine = new CompletableFuture<>();
+        region = cache.regions.putIfAbsent(k, mine);
+        if (region != null) {
+            return region;
+        }
+        executor.execute(() -> {
+            try {
+                mine.complete(build(pipeline, regionI, regionJ, blockM));
+            } catch (Throwable e) {
+                cache.regions.remove(k, mine);
+                mine.completeExceptionally(e);
+            }
+            evict(cache);
+        });
+        return mine;
     }
 
     private static void evict(RegionCache cache) {
@@ -797,7 +839,7 @@ public final class RiverHydrology {
     }
 
     private static Region build(WorldPipeline pipeline, int regionI, int regionJ, float blockM) {
-        PHASE_T0 = System.nanoTime();
+        PHASE_T0.get()[0] = System.nanoTime();
         int windowI = regionI * REGION_PX - MARGIN_PX;
         int windowJ = regionJ * REGION_PX - MARGIN_PX;
 
@@ -1226,11 +1268,7 @@ public final class RiverHydrology {
         float[] widthOut = new float[GRID * GRID];
         float[] depthOut = new float[GRID * GRID];
         float[] fallOut = new float[GRID * GRID];
-        Paint paint = new Paint(distance, magnitude, waterOut, deltaW,
-                widthOut, depthOut, fallOut);
-
-        float[] arcPos;
-        arcPos = new float[GRID * GRID];
+        float[] arcPos = new float[GRID * GRID];
         Arrays.fill(arcPos, Float.NaN);
         for (int i : chanUp) {
             if (elev[i] < 0f) {
@@ -1247,7 +1285,8 @@ public final class RiverHydrology {
             }
             arcPos[i] = base + len;
         }
-        ARC_POS = arcPos;
+        Paint paint = new Paint(distance, magnitude, waterOut, deltaW,
+                widthOut, depthOut, fallOut, arcPos);
 
         phase("solveLevels");
         meander(elev, channel, chanIdx, down, acc, water,
@@ -2270,8 +2309,11 @@ public final class RiverHydrology {
 
         final int[] src;
 
+        // Arc length of each channel cell along its flow path
+        final float[] arc;
+
         Paint(float[] distance, float[] magnitude, float[] water, float[] deltaW,
-              float[] width, float[] depth, float[] fall) {
+              float[] width, float[] depth, float[] fall, float[] arc) {
             this.src = new int[GRID * GRID];
             Arrays.fill(this.src, -1);
             this.pos = new float[GRID * GRID];
@@ -2283,6 +2325,7 @@ public final class RiverHydrology {
             this.width = width;
             this.depth = depth;
             this.fall = fall;
+            this.arc = arc;
         }
     }
 
@@ -2318,7 +2361,7 @@ public final class RiverHydrology {
             if (!Float.isNaN(w) && (Float.isNaN(p.water[i]) || w > p.water[i])) {
                 p.water[i] = w;
                 p.src[i] = srcIdx;
-                p.pos[i] = (srcIdx >= 0 && ARC_POS != null) ? ARC_POS[srcIdx] : Float.NaN;
+                p.pos[i] = srcIdx >= 0 ? p.arc[srcIdx] : Float.NaN;
             }
             if (wid > p.width[i]) {
                 p.width[i] = wid;
@@ -2338,7 +2381,7 @@ public final class RiverHydrology {
         p.magnitude[i] = m;
         p.water[i] = w;
         p.src[i] = srcIdx;
-        p.pos[i] = (srcIdx >= 0 && ARC_POS != null) ? ARC_POS[srcIdx] : Float.NaN;
+        p.pos[i] = srcIdx >= 0 ? p.arc[srcIdx] : Float.NaN;
         p.width[i] = wid;
         p.depth[i] = dep;
         p.fall[i] = fl;
