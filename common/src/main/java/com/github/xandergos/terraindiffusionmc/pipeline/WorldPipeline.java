@@ -18,6 +18,9 @@ public final class WorldPipeline implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(WorldPipeline.class);
 
+    // The one thread that owns the ONNX sessions and every pipeline's tensor caches
+    static final PriorityExecutor INFERENCE = new PriorityExecutor("terrain-diffusion-inference", 1);
+
     static final int LATENT_COMPRESSION = WorldPipelineModelConfig.latentCompression();
     static final float SIGMA_DATA = EDMScheduler.SIGMA_DATA;
 
@@ -124,7 +127,7 @@ public final class WorldPipeline implements AutoCloseable {
     public void setSeed(long newSeed) {
         long s = newSeed & 0xFFFFFFFFFFFFFFFFL;
         if (s == this.seed) return;
-        InferenceThread.call(() -> {
+        INFERENCE.call(() -> {
             this.seed = s;
             this.syntheticMapFactory = new SyntheticMapFactory(s);
             tileStore.clearAllCaches();
@@ -437,7 +440,7 @@ public final class WorldPipeline implements AutoCloseable {
 
     // Runs tensor reads on the inference thread, reporting any windows they had to compute
     private <T> T read(int height, int width, Callable<T> reads) {
-        return InferenceThread.call(() -> {
+        return INFERENCE.call(() -> {
             long before = tileStore.getTotalComputedWindowCount();
             T slices = reads.call();
             long computed = tileStore.getTotalComputedWindowCount() - before;

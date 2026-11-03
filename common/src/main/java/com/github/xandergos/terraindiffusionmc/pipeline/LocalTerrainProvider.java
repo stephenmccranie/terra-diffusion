@@ -202,7 +202,7 @@ public final class LocalTerrainProvider {
     }
 
     public static void setExplorerSeed(long newSeed) {
-        InferenceThread.call(() -> {
+        WorldPipeline.INFERENCE.call(() -> {
             explorer().pipeline.setSeed(newSeed);
             explorerSeed = newSeed;
             return null;
@@ -217,22 +217,22 @@ public final class LocalTerrainProvider {
 
     // Frees the explorer's pipeline; the next explorer request rebuilds it on the world's seed
     public static void releaseExplorer() {
-        InferenceThread.submit(() -> {
+        WorldPipeline.INFERENCE.submit(() -> {
             if (EXPLORER != null) {
                 EXPLORER.pipeline.close();
                 EXPLORER = null;
             }
             explorerGeneration = -1;
             return null;
-        }, InferenceThread.PRIORITY_BLOCKING);
+        }, PriorityExecutor.BLOCKING);
     }
 
     public static float[][] explorerData(int i1, int j1, int i2, int j2, boolean withClimate) {
-        return InferenceThread.call(() -> explorer().pipeline.get(i1, j1, i2, j2, withClimate));
+        return WorldPipeline.INFERENCE.call(() -> explorer().pipeline.get(i1, j1, i2, j2, withClimate));
     }
 
     public static FloatTensor explorerCoarse(int ci0, int cj0, int ci1, int cj1) {
-        return InferenceThread.call(() -> explorer().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
+        return WorldPipeline.INFERENCE.call(() -> explorer().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1));
     }
 
     // The explorer view most recently asked for; water for any other view is abandoned
@@ -243,7 +243,7 @@ public final class LocalTerrainProvider {
     // Returns {bed elevation, water surface} for an explorer view, or null if the view changed first
     public static float[][] explorerWater(int i1, int j1, int i2, int j2, String view) throws Exception {
         BooleanSupplier stale = () -> !view.equals(explorerView);
-        return InferenceThread.submit(() -> {
+        return WorldPipeline.INFERENCE.submit(() -> {
             if (stale.getAsBoolean()) return null;
             try {
                 return InfiniteTensor.cancellable(stale, () -> {
@@ -258,7 +258,7 @@ public final class LocalTerrainProvider {
             } catch (CancellationException e) {
                 return null;
             }
-        }, InferenceThread.PRIORITY_BACKGROUND).get();
+        }, PriorityExecutor.BACKGROUND).get();
     }
 
     public static FloatTensor getPipelineCoarse(int ci0, int cj0, int ci1, int cj1) {

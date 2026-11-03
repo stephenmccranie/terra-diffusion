@@ -1,20 +1,20 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import com.github.xandergos.terraindiffusionmc.infinitetensor.InfiniteTensor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Map;
 import java.util.PriorityQueue;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class RiverHydrology {
+
+    private static final Logger LOG = LoggerFactory.getLogger(RiverHydrology.class);
 
     private static final int REGION_PX = 1024;
 
@@ -241,8 +241,10 @@ public final class RiverHydrology {
         final float[] depth;
         final float[] fall;
         final KarstNetwork karst;
-        private int[] lakeBody;
-        private byte[] bodyVerdict;
+        // 8-connected lake body of each crop cell, -1 where there is no lake
+        final int[] lakeBody;
+        // Whether each body survives comparison with its neighbours, judged when first sampled
+        final byte[] bodyVerdict;
 
         Region(int regionI, int regionJ, float[] distance, float[] magnitude, float[] water,
                float[] lake, float[] lakeDeep, float[] delta,
@@ -259,6 +261,8 @@ public final class RiverHydrology {
             this.depth = depth;
             this.fall = fall;
             this.karst = karst;
+            this.lakeBody = labelLakes(lake);
+            this.bodyVerdict = new byte[Arrays.stream(lakeBody).max().orElse(-1) + 1];
         }
     }
 
@@ -269,9 +273,11 @@ public final class RiverHydrology {
     private static final int MAX_CACHED_REGIONS = 9;
 
     // Hydrology regions built for one pipeline, least recently used evicted first.
-    // A region is built once, by the first thread to need it; later callers wait for that build.
+    // Each region is built once; everyone who needs it waits for that one build.
     public static final class RegionCache {
-        private final Map<Long, CompletableFuture<Region>> regions = new ConcurrentHashMap<>();
+        private final Map<Long, PriorityExecutor.Task<Region>> regions = new ConcurrentHashMap<>();
+        // The clock reading when each region was last used; it advances only when a region is added,
+        // which is the only time eviction looks, so a lookup never has to write a shared counter
         private final Map<Long, AtomicLong> used = new ConcurrentHashMap<>();
         private final AtomicLong clock = new AtomicLong();
         private boolean seamNeighbours = true;
@@ -298,26 +304,23 @@ public final class RiverHydrology {
         }
     }
 
-    // Starts building, off the caller's thread, every region within a quarter region of the native
-    // rectangle that nobody has asked for yet, so it is ready before generation reaches it
+    // Queues every region within a quarter region of the native rectangle that nobody has asked for yet,
+    // so it is ready before generation reaches it. Skipped while builds are already waiting, so scans
+    // far from the generation front cannot pile up speculative work.
     public static void prefetch(WorldPipeline pipeline, int i0, int j0, int i1, int j1, float blockM) {
+        if (BUILDERS.hasQueued()) return;
         int lead = REGION_PX / 4;
         int ri0 = Math.floorDiv(i0 - lead, REGION_PX), ri1 = Math.floorDiv(i1 + lead - 1, REGION_PX);
         int rj0 = Math.floorDiv(j0 - lead, REGION_PX), rj1 = Math.floorDiv(j1 + lead - 1, REGION_PX);
         for (int ri = ri0; ri <= ri1; ri++) {
             for (int rj = rj0; rj <= rj1; rj++) {
-                claim(pipeline, ri, rj, blockM, PREFETCH);
+                request(pipeline, ri, rj, blockM, PriorityExecutor.BACKGROUND);
             }
         }
     }
 
-    // Its tensor reads queue behind any caller already waiting on the inference thread
-    static final String PREFETCH_THREAD = "terrain-diffusion-prefetch";
-    private static final ExecutorService PREFETCH = Executors.newFixedThreadPool(2, r -> {
-        Thread t = new Thread(r, PREFETCH_THREAD);
-        t.setDaemon(true);
-        return t;
-    });
+    // A region build holds about a gigabyte of working arrays, so at most two run at once
+    private static final PriorityExecutor BUILDERS = new PriorityExecutor("terrain-diffusion-hydrology", 2);
 
     private RiverHydrology() {
     }
@@ -458,18 +461,15 @@ public final class RiverHydrology {
 
     private static final int[][] NEIGHBOURS = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
 
-    // Labels each 8-connected lake body in the region's crop; -1 where there is no lake
-    private static synchronized int[] lakeBodies(Region region) {
-        if (region.lakeBody != null) {
-            return region.lakeBody;
-        }
+    // Labels each 8-connected lake body in a region's crop; -1 where there is no lake
+    private static int[] labelLakes(float[] lake) {
         int n = CROP_N * CROP_N;
         int[] label = new int[n];
         Arrays.fill(label, -1);
         int[] stack = new int[n];
         int bodies = 0;
         for (int seed = 0; seed < n; seed++) {
-            if (label[seed] != -1 || Float.isNaN(region.lake[seed])) continue;
+            if (label[seed] != -1 || Float.isNaN(lake[seed])) continue;
             int top = 0;
             stack[top++] = seed;
             label[seed] = bodies;
@@ -482,19 +482,17 @@ public final class RiverHydrology {
                     for (int dc = -1; dc <= 1; dc++) {
                         int cc = c + dc;
                         if ((dr == 0 && dc == 0) || cc < 0 || cc >= CROP_N) continue;
-                        top = claim(region, label, stack, top, rr * CROP_N + cc, bodies);
+                        top = claim(lake, label, stack, top, rr * CROP_N + cc, bodies);
                     }
                 }
             }
             bodies++;
         }
-        region.bodyVerdict = new byte[bodies];
-        region.lakeBody = label;
         return label;
     }
 
-    private static int claim(Region region, int[] label, int[] stack, int top, int k, int body) {
-        if (label[k] == -1 && !Float.isNaN(region.lake[k])) {
+    private static int claim(float[] lake, int[] label, int[] stack, int top, int k, int body) {
+        if (label[k] == -1 && !Float.isNaN(lake[k])) {
             label[k] = body;
             stack[top++] = k;
         }
@@ -506,7 +504,7 @@ public final class RiverHydrology {
         if (LAKE_AGREE <= 0f) {
             return true;
         }
-        int body = lakeBodies(region)[at];
+        int body = region.lakeBody[at];
         byte verdict = region.bodyVerdict[body];
         if (verdict == 0) {
             verdict = judgeBody(pipeline, region, body, blockM);
@@ -797,34 +795,43 @@ public final class RiverHydrology {
     }
 
     private static Region regionFor(WorldPipeline pipeline, int regionI, int regionJ, float blockM) {
-        return claim(pipeline, regionI, regionJ, blockM, Runnable::run).join();
+        return PriorityExecutor.join(request(pipeline, regionI, regionJ, blockM, PriorityExecutor.callerPriority()));
     }
 
-    // The region's build, started on the executor by whoever asks first and shared by everyone after
-    private static CompletableFuture<Region> claim(WorldPipeline pipeline, int regionI, int regionJ,
-                                                   float blockM, Executor executor) {
+    // The region's one build, queued by whoever asks first and lifted to the urgency of anyone who waits
+    private static PriorityExecutor.Task<Region> request(WorldPipeline pipeline, int regionI, int regionJ,
+                                                         float blockM, int priority) {
         RegionCache cache = pipeline.hydrology;
         long k = key(regionI, regionJ);
-        cache.used.computeIfAbsent(k, x -> new AtomicLong()).set(cache.clock.incrementAndGet());
-        CompletableFuture<Region> region = cache.regions.get(k);
-        if (region != null) {
-            return region;
-        }
-        CompletableFuture<Region> mine = new CompletableFuture<>();
-        region = cache.regions.putIfAbsent(k, mine);
-        if (region != null) {
-            return region;
-        }
-        executor.execute(() -> {
-            try {
-                mine.complete(build(pipeline, regionI, regionJ, blockM));
-            } catch (Throwable e) {
-                cache.regions.remove(k, mine);
-                mine.completeExceptionally(e);
+        PriorityExecutor.Task<Region> region = cache.regions.get(k);
+        if (region == null) {
+            PriorityExecutor.Task<Region> mine = new PriorityExecutor.Task<>(() -> {
+                try {
+                    return build(pipeline, regionI, regionJ, blockM);
+                } catch (Throwable e) {
+                    cache.regions.remove(k);
+                    LOG.error("River region {} {} failed to build", regionI, regionJ, e);
+                    throw e;
+                }
+            }, priority);
+            region = cache.regions.putIfAbsent(k, mine);
+            if (region == null) {
+                cache.used.put(k, new AtomicLong(cache.clock.incrementAndGet()));
+                evict(cache);
+                // The inference thread cannot wait for a builder that needs it, so it builds its own
+                if (WorldPipeline.INFERENCE.isCurrent()) {
+                    mine.run();
+                } else {
+                    BUILDERS.execute(mine);
+                }
+                return mine;
             }
-            evict(cache);
-        });
-        return mine;
+        }
+        AtomicLong used = cache.used.get(k);
+        long now = cache.clock.get();
+        if (used != null && used.get() != now) used.set(now);
+        BUILDERS.raise(region, priority);
+        return region;
     }
 
     private static void evict(RegionCache cache) {
