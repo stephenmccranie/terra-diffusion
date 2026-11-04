@@ -784,7 +784,8 @@ public final class RiverHydrology {
         float[] slope = new float[GRID * GRID];
 
         InfiniteTensor.throwIfCancelled();
-        float[] acc = accumulate(routing, elev, fillDepth, down, slope, windowI, windowJ);
+        float[] acc = accumulate(routing, elev, fillDepth, down, slope, windowI, windowJ,
+                inflow(pipeline, windowI, windowJ, elev));
 
         float[] distance = new float[GRID * GRID];
         Arrays.fill(distance, Float.MAX_VALUE);
@@ -1925,10 +1926,10 @@ public final class RiverHydrology {
     // Smallest catchment worth carrying in, in native cells
     private static final float SEED_MIN_CELLS = 200000f;
 
-    // Catchment of every window cell in native cells
+    // Catchment of every window cell in native cells, counting what the coarse drainage says enters the window
     private static float[] accumulate(float[] elev, float[] slopeSurface,
                                       float[] fillDepthOut, int[] downOut, float[] slopeOut,
-                                      int windowI, int windowJ) {
+                                      int windowI, int windowJ, float[] inflow) {
         int n = GRID * GRID;
         float[] filled = elev.clone();
         boolean[] closed = new boolean[n];
@@ -2031,7 +2032,7 @@ public final class RiverHydrology {
         InfiniteTensor.throwIfCancelled();
 
         float[] acc = new float[n];
-        Arrays.fill(acc, 1f);
+        for (int i = 0; i < n; i++) acc[i] = 1f + inflow[i];
 
         final float QUADRANT = (float) (Math.PI / 4.0);
         for (int oi = n - 1; oi >= 0; oi--) {
@@ -2105,6 +2106,93 @@ public final class RiverHydrology {
         InfiniteTensor.throwIfCancelled();
         for (int i = 0; i < n; i++) fillDepthOut[i] = filled[i] - elev[i];
         return acc;
+    }
+
+    // Latent pixels of land drained around a region's window to find the rivers that enter it
+    private static final int INFLOW_MARGIN = 192;
+
+    // Native cells of catchment from beyond the window that enter it at each window cell. A coarse drainage
+    // map of the land around the window, from the model's low-resolution heights, follows every outside cell
+    // to where it first crosses into the window; there its catchment enters beside the lowest rim cell of the
+    // coarse cell it crosses into. A river entering the window so arrives at its real size, and regions on
+    // either side of a seam agree on which rivers exist.
+    private static float[] inflow(WorldPipeline pipeline, int windowI, int windowJ, float[] elev) {
+        int lc = WorldPipeline.LATENT_COMPRESSION;
+        int inner = GRID / lc, cg = inner + 2 * INFLOW_MARGIN, cn = cg * cg;
+        int li0 = Math.floorDiv(windowI, lc) - INFLOW_MARGIN, lj0 = Math.floorDiv(windowJ, lc) - INFLOW_MARGIN;
+        float[] height = pipeline.getLowfreqSlice(li0, lj0, li0 + cg, lj0 + cg);
+        for (int k = 0; k < cn; k++) {
+            float m = Math.signum(height[k]) * height[k] * height[k];
+            height[k] = WorldPipeline.RELIEF.apply(m, m);
+        }
+
+        // Priority flood from the coarse map's edge and the sea; each cell drains to the cell it was reached
+        // from, and cells of equal height are reached in the order they were found, so level ground drains
+        // evenly towards its outlet
+        int[] parent = new int[cn];
+        int[] reached = new int[cn];
+        float[] filled = new float[cn];
+        boolean[] seen = new boolean[cn];
+        LongHeap open = new LongHeap(cn);
+        int found = 0;
+        for (int k = 0; k < cn; k++) {
+            int r = k / cg, c = k % cg;
+            if (height[k] < 0f || r == 0 || c == 0 || r == cg - 1 || c == cg - 1) {
+                seen[k] = true;
+                parent[k] = -1;
+                filled[k] = height[k];
+                reached[found] = k;
+                open.push(pack(filled[k], found++));
+            }
+        }
+        int[] order = new int[cn];
+        int popped = 0;
+        while (!open.isEmpty()) {
+            int k = reached[(int) open.pop()];
+            order[popped++] = k;
+            int r = k / cg, c = k % cg;
+            for (int dr = -1; dr <= 1; dr++) {
+                for (int dc = -1; dc <= 1; dc++) {
+                    int rr = r + dr, cc = c + dc;
+                    if ((dr == 0 && dc == 0) || rr < 0 || cc < 0 || rr >= cg || cc >= cg) continue;
+                    int j = rr * cg + cc;
+                    if (seen[j]) continue;
+                    seen[j] = true;
+                    parent[j] = k;
+                    filled[j] = Math.max(height[j], filled[k]);
+                    reached[found] = j;
+                    open.push(pack(filled[j], found++));
+                }
+            }
+        }
+
+        float[] inflow = new float[GRID * GRID];
+        float[] area = new float[cn];
+        for (int o = popped - 1; o >= 0; o--) {
+            int k = order[o];
+            int r = k / cg - INFLOW_MARGIN, c = k % cg - INFLOW_MARGIN;
+            if (r >= 0 && c >= 0 && r < inner && c < inner) continue;
+            area[k] += lc * lc;
+            int p = parent[k];
+            if (p < 0) continue;
+            int pr = p / cg - INFLOW_MARGIN, pc = p % cg - INFLOW_MARGIN;
+            if (pr < 0 || pc < 0 || pr >= inner || pc >= inner) {
+                area[p] += area[k];
+                continue;
+            }
+            // The rim this crossing passes, and the window cells of the coarse cell along it
+            boolean acrossRows = r < 0 || r >= inner;
+            int rimR = r < 0 ? 0 : GRID - 1, rimC = c < 0 ? 0 : GRID - 1;
+            int lowest = -1;
+            for (int s = 0; s < lc; s++) {
+                int cell = acrossRows ? rimR * GRID + pc * lc + s : (pr * lc + s) * GRID + rimC;
+                if (lowest < 0 || elev[cell] < elev[lowest]) lowest = cell;
+            }
+            int lr = Math.max(1, Math.min(GRID - 2, lowest / GRID + (acrossRows ? (r < 0 ? 1 : -1) : 0)));
+            int lcol = Math.max(1, Math.min(GRID - 2, lowest % GRID + (acrossRows ? 0 : (c < 0 ? 1 : -1))));
+            inflow[lr * GRID + lcol] += area[k];
+        }
+        return inflow;
     }
 
     // How far water falls from cell a to cell b, as seen from a flat cell or not: across a level only the
