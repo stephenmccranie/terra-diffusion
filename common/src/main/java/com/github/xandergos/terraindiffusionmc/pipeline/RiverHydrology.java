@@ -517,80 +517,64 @@ public final class RiverHydrology {
         return area;
     }
 
-    // A basin fills to its rim where what drains into it makes up what evaporates from the lake's surface
-    private static float[][] lakes(float[] elev, float[] fillDepth, float[] seaDist, int[] landArea,
-                                 boolean[] channel, float[] acc, float[] evaporation) {
-        int n = GRID * GRID;
-        float[] lake = new float[n];
-        Arrays.fill(lake, Float.NaN);
-
-        float[] deep = new float[n];
-        Arrays.fill(deep, Float.NaN);
-
-        boolean[] seen = new boolean[n];
-        int[] queue = new int[n];
-        int[] nr4 = {-1, 1, 0, 0}, nc4 = {0, 0, -1, 1};
-
-        for (int start = 0; start < n; start++) {
-            if (seen[start] || elev[start] < 0f || fillDepth[start] <= LAKE_FLOOR_M) {
-                continue;
+    // Gives each basin whose inflow falls short of the evaporation from its full surface a lake at the level where
+    // the two balance, filling the lowest ground first, and makes that lake a sink, as is the lowest point of a
+    // basin too dry to hold one. Returns whether there were any.
+    private static boolean terminalLakes(Drainage d, float[] elev, float[] evaporation, boolean[] sink,
+                                         float[] lake, float[] deep) {
+        int basins = d.loss.length;
+        boolean[] closed = new boolean[basins];
+        int count = 0;
+        for (int i = 0; i < GRID * GRID; i++) {
+            int b = d.basin[i];
+            if (b >= 0 && d.inflow[b] < d.loss[b]) {
+                closed[b] = true;
+                count++;
             }
-            int head = 0, tail = 0;
-            queue[tail++] = start;
-            seen[start] = true;
-
-            float deepest = 0f;
-            float nearestSea = Float.MAX_VALUE;
-            float inflow = 0f, loss = 0f;
-            boolean drained = false;
-            int minR = GRID, maxR = -1, minC = GRID, maxC = -1;
-
-            while (head < tail) {
-                int i = queue[head++];
-                if (fillDepth[i] > deepest) {
-                    deepest = fillDepth[i];
-                }
-                inflow = Math.max(inflow, acc[i]);
-                loss += evaporation[i];
-                if (channel[i]) {
-                    drained = true;
-                }
-                if (seaDist[i] < nearestSea) {
-                    nearestSea = seaDist[i];
-                }
-                int r = i / GRID, c = i % GRID;
-                if (r < minR) minR = r;
-                if (r > maxR) maxR = r;
-                if (c < minC) minC = c;
-                if (c > maxC) maxC = c;
-
-                for (int k = 0; k < 4; k++) {
-                    int rr = r + nr4[k], cc = c + nc4[k];
-                    if (rr < 0 || cc < 0 || rr >= GRID || cc >= GRID) {
-                        continue;
-                    }
-                    int j = rr * GRID + cc;
-                    if (seen[j] || elev[j] < 0f || fillDepth[j] <= LAKE_FLOOR_M) {
-                        continue;
-                    }
-                    seen[j] = true;
-                    queue[tail++] = j;
-                }
+        }
+        if (count == 0) {
+            return false;
+        }
+        long[] lowestFirst = new long[count];
+        count = 0;
+        for (int i = 0; i < GRID * GRID; i++) {
+            if (d.basin[i] >= 0 && closed[d.basin[i]]) lowestFirst[count++] = pack(elev[i], i);
+        }
+        Arrays.sort(lowestFirst);
+        float[] met = new float[basins], surface = new float[basins], bottom = new float[basins];
+        Arrays.fill(surface, Float.NaN);
+        Arrays.fill(bottom, Float.NaN);
+        for (long p : lowestFirst) {
+            int i = (int) p, b = d.basin[i];
+            if (Float.isNaN(bottom[b])) {
+                bottom[b] = elev[i];
+                sink[i] = true;
             }
-
-            boolean atBorder = minR == 0 || minC == 0 || maxR == GRID - 1 || maxC == GRID - 1;
-
-            if (drained || atBorder || inflow < loss
-                    || deepest < LAKE_MIN_DEPTH_M || tail < LAKE_MIN_CELLS
-                    || nearestSea < LAKE_MIN_SEA_CELLS
-                    || landArea[start] < LAKE_MIN_LANDMASS_CELLS
-                    || maxR - minR + 1 > LAKE_MAX_SPAN || maxC - minC + 1 > LAKE_MAX_SPAN) {
-                continue;
+            if (!Float.isNaN(surface[b])) continue;
+            if (met[b] + evaporation[i] > d.inflow[b]) {
+                surface[b] = elev[i];
+            } else {
+                met[b] += evaporation[i];
             }
-            for (int m = 0; m < tail; m++) {
-                int i = queue[m];
-                lake[i] = elev[i] + fillDepth[i];
-                deep[i] = deepest;
+        }
+        for (long p : lowestFirst) {
+            int i = (int) p, b = d.basin[i];
+            if (elev[i] < surface[b]) {
+                lake[i] = surface[b];
+                deep[i] = surface[b] - bottom[b];
+                sink[i] = true;
+            }
+        }
+        return true;
+    }
+
+    // Fills every remaining basin to its rim and carries each lake's surface a few cells onto its shore
+    private static void fillLakes(Drainage d, float[] elev, float[] lake, float[] deep) {
+        for (int i = 0; i < GRID * GRID; i++) {
+            int b = d.basin[i];
+            if (b >= 0) {
+                lake[i] = d.level[b];
+                deep[i] = d.deepest[b];
             }
         }
 
@@ -624,7 +608,6 @@ public final class RiverHydrology {
                 }
             }
         }
-        return new float[][]{lake, deep};
     }
 
     private static long pack(float key, int index) {
@@ -771,13 +754,27 @@ public final class RiverHydrology {
 
         InfiniteTensor.throwIfCancelled();
         float[] seaDist = seaDistance(elev);
-        float[] fillDepth = new float[GRID * GRID];
-        int[] down = new int[GRID * GRID];
-
+        int[] landArea = landmassArea(elev);
         float[][] climate = waterBalance(pipeline, windowI, windowJ, GRID, 1);
-        InfiniteTensor.throwIfCancelled();
-        float[] acc = accumulate(routing, fillDepth, down, windowI, windowJ,
-                climate[0], inflow(pipeline, windowI, windowJ, elev));
+        float[] entering = inflow(pipeline, windowI, windowJ, elev);
+
+        boolean[] sink = new boolean[GRID * GRID];
+        for (int i = 0; i < GRID * GRID; i++) sink[i] = elev[i] < 0f;
+        float[] lake = new float[GRID * GRID];
+        float[] lakeDeep = new float[GRID * GRID];
+        Arrays.fill(lake, Float.NaN);
+        Arrays.fill(lakeDeep, Float.NaN);
+        // A lake that cannot fill its basin keeps all the water that reaches it, so the land below gets less and
+        // the window drains again, until every basin left overflows
+        Drainage drained;
+        do {
+            InfiniteTensor.throwIfCancelled();
+            drained = drain(routing, sink, climate[0], climate[1], entering, seaDist, landArea, windowI, windowJ);
+        } while (terminalLakes(drained, elev, climate[1], sink, lake, lakeDeep));
+        fillLakes(drained, elev, lake, lakeDeep);
+        float[] fillDepth = drained.fillDepth;
+        int[] down = drained.down;
+        float[] acc = drained.acc;
 
         float[] distance = new float[GRID * GRID];
         Arrays.fill(distance, Float.MAX_VALUE);
@@ -790,7 +787,7 @@ public final class RiverHydrology {
 
         for (int i = 0; i < GRID * GRID; i++) {
             int r = i / GRID, c = i % GRID;
-            channel[i] = elev[i] >= 0f && acc[i] >= STREAM_CELLS
+            channel[i] = !sink[i] && acc[i] >= STREAM_CELLS
                     && r > 0 && c > 0 && r < GRID - 1 && c < GRID - 1;
         }
 
@@ -817,7 +814,7 @@ public final class RiverHydrology {
                 if (d < 0) {
                     break;
                 }
-                if (elev[d] < 0f) {
+                if (sink[d]) {
                     verdict = REACHES;
                     break;
                 }
@@ -844,11 +841,6 @@ public final class RiverHydrology {
         int[] chanUp = channelCells(channel, bySurface);
 
 
-        InfiniteTensor.throwIfCancelled();
-        float[][] lakeFields = lakes(elev, fillDepth, seaDist, landmassArea(elev), channel, acc, climate[1]);
-        float[] lake = lakeFields[0];
-        float[] lakeDeep = lakeFields[1];
-
         float[] perR = new float[GRID * GRID];
         float[] perC = new float[GRID * GRID];
         InfiniteTensor.throwIfCancelled();
@@ -864,20 +856,13 @@ public final class RiverHydrology {
         InfiniteTensor.throwIfCancelled();
         meanderOffsets(elev, chanIdx, widthM, perR, perC, windowI, windowJ, offR, offC);
 
-
-
-        float[] filled = new float[GRID * GRID];
-        for (int i = 0; i < GRID * GRID; i++) {
-            filled[i] = elev[i] + fillDepth[i];
-        }
-
         InfiniteTensor.throwIfCancelled();
         float[] holdM = containGround(elev, elev, chanIdx, offR, offC, perR, perC, widthM);
 
         float[] water = new float[GRID * GRID];
         solveLevels(channel, chanIdx, chanUp, elev, lake, holdM, depthM, widthM, down, blockM, water);
 
-        if (prunePerched(channel, water, elev, lake, down, blockM)) {
+        if (prunePerched(channel, water, elev, lake, sink, down, blockM)) {
             chanIdx = channelCells(channel, null);
             chanUp = channelCells(channel, bySurface);
         }
@@ -1662,7 +1647,7 @@ public final class RiverHydrology {
 
     // Returns whether any channel cell was removed
     private static boolean prunePerched(boolean[] channel, float[] water, float[] elev, float[] lake,
-                                        int[] down, float blockM) {
+                                        boolean[] sink, int[] down, float blockM) {
         int n = GRID * GRID;
         boolean[] blocked = new boolean[n];
         boolean any = false;
@@ -1702,7 +1687,7 @@ public final class RiverHydrology {
                 if (d < 0) {
                     break;
                 }
-                if (elev[d] < 0f || fate[d] == REACHES) {
+                if (sink[d] || fate[d] == REACHES) {
                     verdict = REACHES;
                     break;
                 }
@@ -1844,11 +1829,27 @@ public final class RiverHydrology {
         p.depth[i] = dep;
     }
 
-    // Catchment of every window cell, each cell counted by its runoff, with what the coarse drainage says
-    // enters the window
-    private static float[] accumulate(float[] elev, float[] fillDepthOut, int[] downOut,
-                                      int windowI, int windowJ, float[] runoff, float[] inflow) {
+    // How water drains a window: where each cell sends it, how much passes through, and the lake basins it
+    // fills on the way
+    private static final class Drainage {
+        final float[] fillDepth = new float[GRID * GRID];
+        final int[] down = new int[GRID * GRID];
+        final float[] acc = new float[GRID * GRID];
+        // The lake basin holding each cell, -1 outside every basin
+        final int[] basin = new int[GRID * GRID];
+        // Per basin: its surface when full, its depth there, what evaporates from that surface, and the water
+        // that reaches it
+        float[] level, deepest, loss, inflow;
+    }
+
+    // Drains the window into the sea, its edges and every sink, each cell counted by its runoff, with what the
+    // coarse drainage says enters the window. A lake basin is a filled depression deep and broad enough to hold
+    // a lake; water crosses it to its outlet and leaves less what evaporates from its surface.
+    private static Drainage drain(float[] elev, boolean[] sink, float[] runoff, float[] evaporation,
+                                  float[] inflow, float[] seaDist, int[] landArea, int windowI, int windowJ) {
         int n = GRID * GRID;
+        Drainage d = new Drainage();
+        int[] downOut = d.down;
         float[] filled = elev.clone();
         boolean[] closed = new boolean[n];
 
@@ -1858,7 +1859,7 @@ public final class RiverHydrology {
 
         for (int i = 0; i < n; i++) {
             int r = i / GRID, c = i % GRID;
-            if (elev[i] < 0f || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
+            if (sink[i] || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
                 closed[i] = true;
                 open.push(pack(filled[i], i));
             }
@@ -1890,7 +1891,7 @@ public final class RiverHydrology {
         boolean[] flat = new boolean[n];
         for (int i = 0; i < n; i++) {
             int r = i / GRID, c = i % GRID;
-            if (elev[i] < 0f || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
+            if (sink[i] || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
                 continue;
             }
             flat[i] = true;
@@ -1929,6 +1930,7 @@ public final class RiverHydrology {
         int[] level = labelLevels(flat, filled);
         int levels = 0;
         for (int i = 0; i < n; i++) levels = Math.max(levels, level[i] + 1);
+        basins(d, level, levels, filled, elev, evaporation, seaDist, landArea);
         float[] highest = new float[levels];
         for (int i = 0; i < n; i++) {
             if (flat[i]) highest[level[i]] = Math.max(highest[level[i]], fromHigh[i]);
@@ -1947,13 +1949,14 @@ public final class RiverHydrology {
         breakTies(ascending, filled, lift);
         InfiniteTensor.throwIfCancelled();
 
-        float[] acc = new float[n];
+        float[] acc = d.acc;
         for (int i = 0; i < n; i++) acc[i] = runoff[i] + inflow[i];
+        float[] unmet = d.loss.clone();
 
         final float QUADRANT = (float) (Math.PI / 4.0);
         for (int oi = n - 1; oi >= 0; oi--) {
             int i = ascending[oi];
-            if (elev[i] < 0f) {
+            if (sink[i]) {
                 continue;
             }
             int r = i / GRID, c = i % GRID;
@@ -2003,9 +2006,16 @@ public final class RiverHydrology {
             float toDiagonal = bestAngle / QUADRANT;
             float toCardinal = 1f - toDiagonal;
             downOut[i] = toCardinal >= toDiagonal ? bestCardinal : bestDiagonal;
-            // Water spreads down open ground, but once it has gathered a river's catchment it keeps to one
-            // channel, which so carries all of it to the sea
-            if (acc[i] >= STREAM_CELLS) {
+            int b = d.basin[i];
+            if (b >= 0 && d.basin[downOut[i]] != b) {
+                d.inflow[b] += acc[i];
+                float evaporated = Math.min(acc[i], unmet[b]);
+                acc[i] -= evaporated;
+                unmet[b] -= evaporated;
+            }
+            // Water spreads down open ground, but once it has gathered a river's catchment, or crosses a lake, it
+            // keeps to one channel, which so carries all of it to the sea
+            if (b >= 0 || acc[i] >= STREAM_CELLS) {
                 acc[downOut[i]] += acc[i];
             } else {
                 acc[bestCardinal] += acc[i] * toCardinal;
@@ -2013,8 +2023,49 @@ public final class RiverHydrology {
             }
         }
         InfiniteTensor.throwIfCancelled();
-        for (int i = 0; i < n; i++) fillDepthOut[i] = filled[i] - elev[i];
-        return acc;
+        for (int i = 0; i < n; i++) d.fillDepth[i] = filled[i] - elev[i];
+        return d;
+    }
+
+    // Marks the levels that are lake basins: deep, broad, inland and wholly inside the window
+    private static void basins(Drainage d, int[] level, int levels, float[] filled, float[] elev,
+                               float[] evaporation, float[] seaDist, int[] landArea) {
+        int[] cells = new int[levels], land = new int[levels];
+        int[] minR = new int[levels], maxR = new int[levels], minC = new int[levels], maxC = new int[levels];
+        float[] nearestSea = new float[levels];
+        Arrays.fill(minR, GRID);
+        Arrays.fill(minC, GRID);
+        Arrays.fill(nearestSea, Float.MAX_VALUE);
+        d.level = new float[levels];
+        d.deepest = new float[levels];
+        d.loss = new float[levels];
+        d.inflow = new float[levels];
+        for (int i = 0; i < GRID * GRID; i++) {
+            int b = level[i];
+            if (b < 0) continue;
+            int r = i / GRID, c = i % GRID;
+            cells[b]++;
+            land[b] = landArea[i];
+            d.level[b] = filled[i];
+            d.deepest[b] = Math.max(d.deepest[b], filled[i] - elev[i]);
+            d.loss[b] += evaporation[i];
+            nearestSea[b] = Math.min(nearestSea[b], seaDist[i]);
+            minR[b] = Math.min(minR[b], r);
+            maxR[b] = Math.max(maxR[b], r);
+            minC[b] = Math.min(minC[b], c);
+            maxC[b] = Math.max(maxC[b], c);
+        }
+        boolean[] lake = new boolean[levels];
+        for (int b = 0; b < levels; b++) {
+            lake[b] = d.deepest[b] >= LAKE_MIN_DEPTH_M && cells[b] >= LAKE_MIN_CELLS
+                    && nearestSea[b] >= LAKE_MIN_SEA_CELLS && land[b] >= LAKE_MIN_LANDMASS_CELLS
+                    && minR[b] > 1 && minC[b] > 1 && maxR[b] < GRID - 2 && maxC[b] < GRID - 2
+                    && maxR[b] - minR[b] < LAKE_MAX_SPAN && maxC[b] - minC[b] < LAKE_MAX_SPAN;
+            if (!lake[b]) d.loss[b] = 0f;
+        }
+        for (int i = 0; i < GRID * GRID; i++) {
+            d.basin[i] = level[i] >= 0 && lake[level[i]] ? level[i] : -1;
+        }
     }
 
     // {runoff from land, net evaporation from open water} of each cell, relative to REFERENCE_RUNOFF_MM, on an
