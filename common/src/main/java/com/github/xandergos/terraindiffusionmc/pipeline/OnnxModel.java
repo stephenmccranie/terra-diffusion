@@ -37,6 +37,7 @@ public final class OnnxModel implements AutoCloseable {
     private static OrtSession activeGpuSession = null;
 
     private final OrtEnvironment env;
+    // Kept only to create the model's GPU session again each time it takes the GPU slot
     private final byte[] optimizedModelBytes;
     private final String name;
     // The model's own session, unless it runs on a GPU with offload_models=true and shares the GPU slot
@@ -77,7 +78,7 @@ public final class OnnxModel implements AutoCloseable {
                 initializeModelSession(rebuiltOptimizedModelLoadResult.modelBytes, start);
                 loadedModelBytes = rebuiltOptimizedModelLoadResult.modelBytes;
             }
-            this.optimizedModelBytes = loadedModelBytes;
+            this.optimizedModelBytes = session == null ? loadedModelBytes : null;
         } catch (Exception e) {
             throw new RuntimeException("Failed to load ONNX model: " + modelFilePath, e);
         }
