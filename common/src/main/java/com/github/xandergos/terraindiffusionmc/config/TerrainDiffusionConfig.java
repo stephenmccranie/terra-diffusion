@@ -153,6 +153,26 @@ public final class TerrainDiffusionConfig {
         return readInt("tfmg.oil_well_pool_radius", 8);
     }
 
+    // Model height, in metres, below which the land's large shape keeps its height
+    public static float reliefStartM() {
+        return readFloat("relief.start", 300f);
+    }
+
+    // Model height, in metres, from which the large shape rises relief.gain metres per metre
+    public static float reliefFullM() {
+        return readFloat("relief.full", 1200f);
+    }
+
+    // How many times as fast the large shape rises above relief.full; 1 keeps the model's heights
+    public static float reliefGain() {
+        return readFloat("relief.gain", 2.5f);
+    }
+
+    // Further rise of ground above its surroundings, as a share of how far it stands above them
+    public static float reliefPeaks() {
+        return readFloat("relief.peaks", 0.8f);
+    }
+
     // Region side length in blocks
     private static int tileSizeCache;
 
@@ -245,6 +265,16 @@ public final class TerrainDiffusionConfig {
         } catch (NumberFormatException e) {
             System.err.println("Invalid int for " + key + ": " + value + ", using default " + defaultValue);
             return defaultValue;
+        }
+    }
+
+    private static float readFloat(String key, float defaultValue) {
+        String value = PROPERTIES.getProperty(key);
+        if (value == null) return defaultValue;
+        try {
+            return Float.parseFloat(value.trim());
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(key + " must be a number; got: " + value, e);
         }
     }
 

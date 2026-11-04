@@ -22,7 +22,7 @@ surface biomes, and pulls Terralith's surface rules in at world load. Details in
 
 **Rivers.** A dendric-propagating ocean-to-source approach inspired by [TerraFirmaCraft](https://github.com/TerraFirmaCraft/TerraFirmaCraft)'s river generation system. Using the terrain given by the model, rivers are post-processed on top of the region. Filled depressions are exactly level, and water crosses them towards where they drain and away from the ground rising around them, so it gathers into one channel instead of ruled parallel lines. Each 1,024-pixel river region is solved on its own window; where two regions disagree about a river, it fades out across the seam instead of ending in a wall.
 
-**Taller mountains.** The model learned real-world heights, so its peaks rarely pass 4,000 m while each world's height assumes a 10,000 m peak. Land below 300 m keeps the model's height, so coasts, rivers and farmland stay put; higher ground rises up to 2.5 times as fast and eases towards 9,800 m, so a 2,000 m range stands about 3,700 m tall and a 4,000 m one about 7,100 m. Temperature keeps the model's heights, so snow lines and climate stay where the model put them, while treelines and bare rock follow the raised ground.
+**Taller mountains.** The model learned real-world heights, so its peaks rarely pass 4,000 m while each world's height assumes a 10,000 m peak. The land's large shape, about a kilometre across, keeps the model's height below 300 m, so coasts, rivers and farmland stay put; above that it rises ever faster, until from 1,200 m on it rises 2.5 m for every metre. Ground keeps its height above or below that shape, so slopes stay as buildable as the model made them, and ridges and summits standing above their surroundings rise a further 80%. A 2,000 m plateau stands about 3,900 m tall, a 3,000 m summit on it about 5,700 m, and a valley cut 500 m into it stays 500 m deep; heights ease towards 9,800 m and never pass it. The curve is set by the `relief.*` keys below. Temperature keeps the model's heights, so snow lines and climate stay where the model put them, while treelines and bare rock follow the raised ground.
 
 **Lakes** are made similar to rivers, filling depressions elegible for holding water to create deep and vast lakes, or small and contained depending on their area of generation.
 
@@ -94,6 +94,15 @@ validate_model=true
 # Port for the local terrain explorer web UI (/td-explore).
 explorer.port=19801
 
+# How the model's heights become world heights; see Taller mountains above. The land's large shape
+# keeps its height below relief.start metres and, from relief.full on, rises relief.gain metres per
+# metre of the model's; ground standing above its surroundings rises a further relief.peaks times as
+# far. relief.gain=1 with relief.peaks=0 keeps the model's heights. Set these before generating.
+relief.start=300
+relief.full=1200
+relief.gain=2.5
+relief.peaks=0.8
+
 # Spawn search: coarse-pixel region sizes for finding a land spawn near (0, 0).
 # Starts at initial_size x initial_size and expands by 8 each step up to max_size x max_size.
 # Each coarse pixel covers a large area (hundreds of blocks), so 16–128 is typically sufficient.
@@ -114,7 +123,7 @@ terralith.enabled=true
 terralith.inject_surface_rules=true
 ```
 
-The last four keys are specific to this fork.
+The `relief.*` keys and the last four keys are specific to this fork.
 
 ### Terralith compatibility
 
