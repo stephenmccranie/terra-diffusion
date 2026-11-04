@@ -1,5 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import com.github.xandergos.terraindiffusionmc.infinitetensor.FloatTensor;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.InfiniteTensor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,26 +36,25 @@ public final class RiverHydrology {
         return out;
     }
 
-    private static final float RIVER_THRESHOLD = 600f;
+    // A river begins where this much catchment drains through one cell, in native cells of land that sheds
+    // REFERENCE_RUNOFF_MM a year
+    private static final float STREAM_CELLS = 150000f;
 
-    private static final float WIDTH_GROWTH_DECADES = 2.0f;
+    private static final float REFERENCE_RUNOFF_MM = 300f;
 
-    private static final float DISCHARGE_AREA_EXPONENT = 0.8f;
-    private static final float WIDTH_Q_EXPONENT = 0.5f;
+    // A river's width and depth at its head; downstream they grow as powers of its discharge (Leopold and
+    // Maddock 1953). Width grows faster than nature's square root, since this world's basins span only a few
+    // tens of times a head's catchment and its main rivers must still grow wide enough to carry freight.
+    private static final float STREAM_WIDTH_M = 60f;
+    private static final float STREAM_DEPTH_M = 11f;
+    private static final float WIDTH_Q_EXPONENT = 0.75f;
     private static final float DEPTH_Q_EXPONENT = 0.4f;
 
-    private static final float BANKFULL_WIDTH_M = 348f;
-    private static final float BANKFULL_DEPTH_M = 9f;
-
-    private static final float MAX_WIDTH_M = 340f;
+    private static final float MAX_WIDTH_M = 720f;
     private static final float MAX_DEPTH_M = 45f;
-
-    private static final float CONFINEMENT_FRACTION = 1.0f;
 
     private static final int CONFINEMENT_SCAN_CELLS = 16;
     private static final float CONFINEMENT_RISE_M = 18f;
-
-    private static final float ORDER_WIDTH_GAIN = 0.06f;
 
     private static final float FREEBOARD_BLOCKS = 0.5f;
 
@@ -70,11 +70,6 @@ public final class RiverHydrology {
 
     private static final float OVERLAP_REACH = 2.0f;
 
-    // Rivers rise between these model heights; above the top one the ground is left to snow, scree and bare
-    // rock
-    private static final float MIN_SOURCE_ELEV_M = 200f;
-    private static final float MAX_SOURCE_ELEV_M = 2600f;
-
     private static final float HOLD_QUANTILE = 0.15f;
 
     private static final float OVERLAP_AGREE_BLOCKS = 0.5f;
@@ -83,8 +78,6 @@ public final class RiverHydrology {
 
     private static final int SCAN_CAP = 20;
 
-    private static final float MAX_INFLUENCE_CELLS = 12f;
-
     private static final int[] FACET_CR = { 0, -1, -1, 0, 0, 1, 1, 0};
     private static final int[] FACET_CC = { 1, 0, 0, -1, -1, 0, 0, 1};
     private static final int[] FACET_DR = {-1, -1, -1, -1, 1, 1, 1, 1};
@@ -92,18 +85,9 @@ public final class RiverHydrology {
 
     private static final float CELL_SIZE_M = 30f;
 
-    private static final double CHANNEL_SLOPE_EXPONENT = 2.0;
-
-    private static final double CHANNEL_INITIATION = 900.0;
-
-    // Ceiling on the slope term at channel initiation
-    private static final double CHANNEL_SLOPE_CAP = 0.5;
-
-    private static final float CONVERGENCE_MIN_M = 0.35f;
-
-    private static final int CONVERGENCE_RADIUS = 3;
-
-    private static final double MFD_EXPONENT = 1.1;
+    // Farthest a channel shapes the ground, in native cells: the valley of the widest river
+    private static final float MAX_INFLUENCE_CELLS =
+            WaterNetwork.VALLEY_WIDTHS * 0.5f * (1f + WaterNetwork.WIDTH_VARIATION) * MAX_WIDTH_M / CELL_SIZE_M;
 
     private static final FastNoiseLite ROUTING_DETAIL = makeRoutingNoise();
 
@@ -152,10 +136,6 @@ public final class RiverHydrology {
         fnl.SetFractalGain(0.45f);
         return fnl;
     }
-
-    private static final float MOUTH_AREA = 140000f;
-
-    private static final float MIN_TRIBUTARY_AREA = 40000f;
 
     private static final float LAKE_MIN_DEPTH_M = 15f;
 
@@ -535,8 +515,9 @@ public final class RiverHydrology {
         return area;
     }
 
+    // A basin fills to its rim where what drains into it makes up what evaporates from the lake's surface
     private static float[][] lakes(float[] elev, float[] fillDepth, float[] seaDist, int[] landArea,
-                                 boolean[] channel) {
+                                 boolean[] channel, float[] acc, float[] evaporation) {
         int n = GRID * GRID;
         float[] lake = new float[n];
         Arrays.fill(lake, Float.NaN);
@@ -558,6 +539,7 @@ public final class RiverHydrology {
 
             float deepest = 0f;
             float nearestSea = Float.MAX_VALUE;
+            float inflow = 0f, loss = 0f;
             boolean drained = false;
             int minR = GRID, maxR = -1, minC = GRID, maxC = -1;
 
@@ -566,6 +548,8 @@ public final class RiverHydrology {
                 if (fillDepth[i] > deepest) {
                     deepest = fillDepth[i];
                 }
+                inflow = Math.max(inflow, acc[i]);
+                loss += evaporation[i];
                 if (channel[i]) {
                     drained = true;
                 }
@@ -594,7 +578,7 @@ public final class RiverHydrology {
 
             boolean atBorder = minR == 0 || minC == 0 || maxR == GRID - 1 || maxC == GRID - 1;
 
-            if (drained || atBorder
+            if (drained || atBorder || inflow < loss
                     || deepest < LAKE_MIN_DEPTH_M || tail < LAKE_MIN_CELLS
                     || nearestSea < LAKE_MIN_SEA_CELLS
                     || landArea[start] < LAKE_MIN_LANDMASS_CELLS
@@ -767,10 +751,7 @@ public final class RiverHydrology {
         int windowI = regionI * REGION_PX - MARGIN_PX;
         int windowJ = regionJ * REGION_PX - MARGIN_PX;
 
-        float[][] heights = pipeline.heights(windowI, windowJ, windowI + WINDOW_PX, windowJ + WINDOW_PX);
-        float[] elev = heights[0];
-        // Where rivers may rise is a matter of real-world height, like climate, whatever the height curve
-        float[] modelElev = heights[1];
+        float[] elev = pipeline.heights(windowI, windowJ, windowI + WINDOW_PX, windowJ + WINDOW_PX)[0];
         InfiniteTensor.throwIfCancelled();
 
         float[] routing = new float[GRID * GRID];
@@ -790,11 +771,11 @@ public final class RiverHydrology {
         float[] seaDist = seaDistance(elev);
         float[] fillDepth = new float[GRID * GRID];
         int[] down = new int[GRID * GRID];
-        float[] slope = new float[GRID * GRID];
 
+        float[][] climate = waterBalance(pipeline, windowI, windowJ, GRID, 1);
         InfiniteTensor.throwIfCancelled();
-        float[] acc = accumulate(routing, elev, fillDepth, down, slope, windowI, windowJ,
-                inflow(pipeline, windowI, windowJ, elev));
+        float[] acc = accumulate(routing, fillDepth, down, windowI, windowJ,
+                climate[0], inflow(pipeline, windowI, windowJ, elev));
 
         float[] distance = new float[GRID * GRID];
         Arrays.fill(distance, Float.MAX_VALUE);
@@ -806,39 +787,9 @@ public final class RiverHydrology {
         int[] bySurface = orderBy(surface, GRID * GRID);
 
         for (int i = 0; i < GRID * GRID; i++) {
-            if (elev[i] < 0f) {
-                continue;
-            }
-            double s = Math.max(slope[i], 1.0e-6);
-
-            int rr0 = i / GRID, cc0 = i % GRID;
-            if (rr0 == 0 || cc0 == 0 || rr0 == GRID - 1 || cc0 == GRID - 1) {
-                continue;
-            }
-
-            double sGate = Math.min(s, CHANNEL_SLOPE_CAP);
-            // MIN_SOURCE_ELEV_M asks where a river may be BORN, so it must not be asked of one
-            boolean continuation = acc[i] >= SEED_MIN_CELLS;
-            if (((modelElev[i] >= MIN_SOURCE_ELEV_M && modelElev[i] <= MAX_SOURCE_ELEV_M) || continuation)
-                    && acc[i] * Math.pow(sGate, CHANNEL_SLOPE_EXPONENT) >= CHANNEL_INITIATION) {
-                channel[i] = true;
-            }
-        }
-
-
-        for (int start = 0; start < GRID * GRID; start++) {
-            if (!channel[start]) {
-                continue;
-            }
-            int at = start;
-            for (int step = 0; step < GRID * 4; step++) {
-                int d = successor(down, at);
-                if (d < 0 || elev[d] < 0f || channel[d]) {
-                    break;
-                }
-                channel[d] = true;
-                at = d;
-            }
+            int r = i / GRID, c = i % GRID;
+            channel[i] = elev[i] >= 0f && acc[i] >= STREAM_CELLS
+                    && r > 0 && c > 0 && r < GRID - 1 && c < GRID - 1;
         }
 
         final byte UNKNOWN = 0, REACHES = 1, STRANDED = 2;
@@ -892,7 +843,7 @@ public final class RiverHydrology {
 
 
         InfiniteTensor.throwIfCancelled();
-        float[][] lakeFields = lakes(elev, fillDepth, seaDist, landmassArea(elev), channel);
+        float[][] lakeFields = lakes(elev, fillDepth, seaDist, landmassArea(elev), channel, acc, climate[1]);
         float[] lake = lakeFields[0];
         float[] lakeDeep = lakeFields[1];
 
@@ -904,7 +855,7 @@ public final class RiverHydrology {
         float[] widthM = new float[GRID * GRID];
         float[] depthM = new float[GRID * GRID];
         InfiniteTensor.throwIfCancelled();
-        hydraulicGeometry(elev, channel, chanIdx, chanUp, acc, down, perR, perC, widthM, depthM);
+        hydraulicGeometry(elev, chanIdx, acc, perR, perC, widthM, depthM);
 
         float[] offR = new float[GRID * GRID];
         float[] offC = new float[GRID * GRID];
@@ -1295,34 +1246,6 @@ public final class RiverHydrology {
             }
     }
 
-    private static int[] strahlerOrder(float[] elev, boolean[] channel, int[] down,
-                                       int[] chanUp) {
-        int n = GRID * GRID;
-        int[] order = new int[n];
-        int[] best = new int[n];
-        int[] ties = new int[n];
-
-        for (int oi = chanUp.length - 1; oi >= 0; oi--) {
-            int i = chanUp[oi];
-            if (elev[i] < 0f) {
-                continue;
-            }
-            int here = best[i] == 0 ? 1 : (ties[i] >= 2 ? best[i] + 1 : best[i]);
-            order[i] = here;
-            int d = successor(down, i);
-            if (d < 0 || !channel[d] || elev[d] < 0f) {
-                continue;
-            }
-            if (here > best[d]) {
-                best[d] = here;
-                ties[d] = 1;
-            } else if (here == best[d]) {
-                ties[d]++;
-            }
-        }
-        return order;
-    }
-
     private static float sampleGrid(float[] field, float rf, float cf) {
         int r0 = (int) Math.floor(rf), c0 = (int) Math.floor(cf);
         if (r0 < 0 || c0 < 0 || r0 >= GRID - 1 || c0 >= GRID - 1) {
@@ -1376,35 +1299,22 @@ public final class RiverHydrology {
         }
     }
 
-    private static void hydraulicGeometry(float[] elev, boolean[] channel, int[] chanIdx, int[] chanUp,
-                                          float[] acc, int[] down,
+    private static void hydraulicGeometry(float[] elev, int[] chanIdx, float[] acc,
                                           float[] perR, float[] perC,
                                           float[] widthOut, float[] depthOut) {
-        int[] order = strahlerOrder(elev, channel, down, chanUp);
         for (int i : chanIdx) {
             if (elev[i] < 0f) {
                 continue;
             }
+            // Discharge relative to a stream head's
+            double q = acc[i] / STREAM_CELLS;
+            float w = (float) Math.min(MAX_WIDTH_M, STREAM_WIDTH_M * Math.pow(q, WIDTH_Q_EXPONENT));
+            float dep = (float) Math.min(MAX_DEPTH_M, STREAM_DEPTH_M * Math.pow(q, DEPTH_Q_EXPONENT));
 
-            double area = Math.max(1.0, acc[i] / RIVER_THRESHOLD);
-            double q = Math.pow(area, DISCHARGE_AREA_EXPONENT);
-            float w = BANKFULL_WIDTH_M * (float) Math.pow(q, WIDTH_Q_EXPONENT);
-            float dep = BANKFULL_DEPTH_M * (float) Math.pow(q, DEPTH_Q_EXPONENT);
-
-            w *= 1f + ORDER_WIDTH_GAIN * (order[i] - 1);
-
-            w = MAX_WIDTH_M * w / (MAX_WIDTH_M + w);
-            dep = MAX_DEPTH_M * dep / (MAX_DEPTH_M + dep);
-
-            float floorM = valleyFloorM(elev, i / GRID, i % GRID, perR[i], perC[i]);
-            w = Math.min(w, CONFINEMENT_FRACTION * floorM);
-
-            float squeeze = Math.min(2f, Math.max(1f,
-                    (BANKFULL_WIDTH_M * (float) Math.pow(q, WIDTH_Q_EXPONENT)) / Math.max(1f, w)));
-            dep *= (float) Math.sqrt(squeeze);
-
-            widthOut[i] = Math.max(CELL_SIZE_M * 0.25f, w);
-            depthOut[i] = Math.max(0.5f, dep);
+            // A valley narrower than the river holds it narrower and deeper
+            float held = Math.min(w, valleyFloorM(elev, i / GRID, i % GRID, perR[i], perC[i]));
+            widthOut[i] = held;
+            depthOut[i] = dep * (float) Math.sqrt(Math.min(2f, w / held));
         }
     }
 
@@ -1932,18 +1842,13 @@ public final class RiverHydrology {
         p.depth[i] = dep;
     }
 
-    // Smallest catchment worth carrying in, in native cells
-    private static final float SEED_MIN_CELLS = 200000f;
-
-    // Catchment of every window cell in native cells, counting what the coarse drainage says enters the window
-    private static float[] accumulate(float[] elev, float[] slopeSurface,
-                                      float[] fillDepthOut, int[] downOut, float[] slopeOut,
-                                      int windowI, int windowJ, float[] inflow) {
+    // Catchment of every window cell, each cell counted by its runoff, with what the coarse drainage says
+    // enters the window
+    private static float[] accumulate(float[] elev, float[] fillDepthOut, int[] downOut,
+                                      int windowI, int windowJ, float[] runoff, float[] inflow) {
         int n = GRID * GRID;
         float[] filled = elev.clone();
         boolean[] closed = new boolean[n];
-
-        Arrays.fill(slopeOut, Float.MAX_VALUE);
 
         Arrays.fill(downOut, -1);
 
@@ -2041,7 +1946,7 @@ public final class RiverHydrology {
         InfiniteTensor.throwIfCancelled();
 
         float[] acc = new float[n];
-        for (int i = 0; i < n; i++) acc[i] = 1f + inflow[i];
+        for (int i = 0; i < n; i++) acc[i] = runoff[i] + inflow[i];
 
         final float QUADRANT = (float) (Math.PI / 4.0);
         for (int oi = n - 1; oi >= 0; oi--) {
@@ -2053,18 +1958,6 @@ public final class RiverHydrology {
             if (r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
                 continue;
             }
-
-            float steepest = 0f;
-            for (int k = 0; k < 8; k++) {
-                int j = (r + nr8[k]) * GRID + (c + nc8[k]);
-                float step = (nr8[k] != 0 && nc8[k] != 0) ? 1.41421f : 1f;
-
-                float trueSlope = (slopeSurface[i] - slopeSurface[j]) / (step * CELL_SIZE_M);
-                if (trueSlope > steepest) {
-                    steepest = trueSlope;
-                }
-            }
-            slopeOut[i] = steepest;
 
             float bestSlope = 0f, bestAngle = 0f;
             int bestCardinal = -1, bestDiagonal = -1;
@@ -2107,14 +2000,59 @@ public final class RiverHydrology {
 
             float toDiagonal = bestAngle / QUADRANT;
             float toCardinal = 1f - toDiagonal;
-            acc[bestCardinal] += acc[i] * toCardinal;
-            acc[bestDiagonal] += acc[i] * toDiagonal;
-
             downOut[i] = toCardinal >= toDiagonal ? bestCardinal : bestDiagonal;
+            // Water spreads down open ground, but once it has gathered a river's catchment it keeps to one
+            // channel, which so carries all of it to the sea
+            if (acc[i] >= STREAM_CELLS) {
+                acc[downOut[i]] += acc[i];
+            } else {
+                acc[bestCardinal] += acc[i] * toCardinal;
+                acc[bestDiagonal] += acc[i] * toDiagonal;
+            }
         }
         InfiniteTensor.throwIfCancelled();
         for (int i = 0; i < n; i++) fillDepthOut[i] = filled[i] - elev[i];
         return acc;
+    }
+
+    // {runoff from land, net evaporation from open water} of each cell, relative to REFERENCE_RUNOFF_MM, on an
+    // n x n grid of cells step native px wide from native (i0, j0), interpolated between the coarse map's cells.
+    // Potential evaporation follows the mean temperature (Holdridge); land keeps the rain evaporation leaves,
+    // after Budyko's curve in Fu's form, and open water loses what potential evaporation takes beyond the rain.
+    private static float[][] waterBalance(WorldPipeline pipeline, int i0, int j0, int n, int step) {
+        int px = 32 * WorldPipeline.LATENT_COMPRESSION;
+        int ci0 = Math.floorDiv(i0, px) - 1, cj0 = Math.floorDiv(j0, px) - 1;
+        int ch = Math.floorDiv(i0 + n * step, px) + 2 - ci0, cw = Math.floorDiv(j0 + n * step, px) + 2 - cj0;
+        FloatTensor coarse = pipeline.getCoarseSlice(ci0, cj0, ci0 + ch, cj0 + cw);
+        int cn = ch * cw;
+        float[][] cell = new float[2][cn];
+        for (int k = 0; k < cn; k++) {
+            float weight = coarse.data[6 * cn + k];
+            if (weight <= 1e-6f) continue;
+            double rain = Math.max(0f, coarse.data[4 * cn + k] / weight);
+            double evaporation = 58.93 * Math.max(0f, coarse.data[2 * cn + k] / weight);
+            double aridity = evaporation / Math.max(1.0, rain);
+            cell[0][k] = (float) (rain * (Math.pow(1 + Math.pow(aridity, 2.6), 1 / 2.6) - aridity)
+                    / REFERENCE_RUNOFF_MM);
+            cell[1][k] = (float) (Math.max(0.0, evaporation - rain) / REFERENCE_RUNOFF_MM);
+        }
+        float[][] out = new float[2][n * n];
+        for (int r = 0; r < n; r++) {
+            float u = (i0 + (r + 0.5f) * step) / px - 0.5f - ci0;
+            int a = (int) Math.floor(u);
+            float tu = u - a;
+            for (int c = 0; c < n; c++) {
+                float v = (j0 + (c + 0.5f) * step) / px - 0.5f - cj0;
+                int b = (int) Math.floor(v);
+                float tv = v - b;
+                int k = a * cw + b;
+                for (int f = 0; f < 2; f++) {
+                    float[] g = cell[f];
+                    out[f][r * n + c] = lerp(lerp(g[k], g[k + 1], tv), lerp(g[k + cw], g[k + cw + 1], tv), tu);
+                }
+            }
+        }
+        return out;
     }
 
     // Latent pixels of land drained around a region's window to find the rivers that enter it
@@ -2130,6 +2068,7 @@ public final class RiverHydrology {
         int inner = GRID / lc, cg = inner + 2 * INFLOW_MARGIN, cn = cg * cg;
         int li0 = Math.floorDiv(windowI, lc) - INFLOW_MARGIN, lj0 = Math.floorDiv(windowJ, lc) - INFLOW_MARGIN;
         float[] height = pipeline.getLowfreqSlice(li0, lj0, li0 + cg, lj0 + cg);
+        float[] runoff = waterBalance(pipeline, li0 * lc, lj0 * lc, cg, lc)[0];
         for (int k = 0; k < cn; k++) {
             float m = Math.signum(height[k]) * height[k] * height[k];
             height[k] = WorldPipeline.RELIEF.apply(m, m);
@@ -2181,7 +2120,7 @@ public final class RiverHydrology {
             int k = order[o];
             int r = k / cg - INFLOW_MARGIN, c = k % cg - INFLOW_MARGIN;
             if (r >= 0 && c >= 0 && r < inner && c < inner) continue;
-            area[k] += lc * lc;
+            area[k] += lc * lc * runoff[k];
             int p = parent[k];
             if (p < 0) continue;
             int pr = p / cg - INFLOW_MARGIN, pc = p % cg - INFLOW_MARGIN;

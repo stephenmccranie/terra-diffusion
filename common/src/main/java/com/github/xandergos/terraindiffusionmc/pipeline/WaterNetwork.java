@@ -11,10 +11,7 @@ public final class WaterNetwork {
     private static final FastNoiseLite BANK_ROUGH = makeFnl(0x1F55, 1f / 11f, 2, 2f, 0.55f);
 
     // How far the valley reaches from the centreline, in channel half-widths
-    private static final float VALLEY_WIDTHS = 2.5f;
-
-    // Narrowest drawn channel, in blocks
-    private static final float MIN_CHANNEL_BLOCKS = 32f;
+    static final float VALLEY_WIDTHS = 2.5f;
 
     // Shallowest drawn channel, in blocks
     private static final float MIN_DEPTH_BLOCKS = 1.5f;
@@ -25,7 +22,8 @@ public final class WaterNetwork {
     // Share of the half-width carved to full depth before the bed rises to the bank
     private static final float CHANNEL_FLAT_FRACTION = 0.55f;
 
-    private static final float WIDTH_VARIATION = 0.25f;
+    // Widest a channel is drawn, as a share above its width
+    static final float WIDTH_VARIATION = 0.25f;
 
     private static final float BANK_ROUGH_BLOCKS = 0.9f;
 
@@ -97,7 +95,7 @@ public final class WaterNetwork {
         float surfaceM = levelM > 0f ? snapToBlock(levelM, metersPerBlock) : 0f;
 
         boolean nearRiver = distBlocks >= 0f;
-        float halfWidth = 0.5f * Math.max(MIN_CHANNEL_BLOCKS, widthM / metersPerBlock)
+        float halfWidth = 0.5f * widthM / metersPerBlock
                 * (1f + WIDTH_VARIATION * Math.max(0f, WIDTH_VAR.GetNoise(worldX, worldZ)));
         float inner = CHANNEL_FLAT_FRACTION * halfWidth;
         float channel = !nearRiver ? 0f
