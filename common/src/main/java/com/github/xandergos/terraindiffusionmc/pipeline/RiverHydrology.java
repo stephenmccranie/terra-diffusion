@@ -239,16 +239,16 @@ public final class RiverHydrology {
         }
     }
 
-    // Queues every neighbour of every region the native rectangle reads that nobody has asked for yet. A
-    // rectangle reads the regions it overlaps and, within a seam blend of an edge (which also covers a tile's
-    // halo), the region across it; reading a region's lakes checks them against that region's neighbours,
-    // which are built on the spot. Queued here, they are built while generation is still crossing tiles that
-    // need no inference. A first build takes minutes on CPU inference against under a minute per 1,024-block
+    // Queues every neighbour of every region within a quarter region of the native rectangle that nobody has
+    // asked for yet. A rectangle reads the regions it overlaps and, within a seam blend of an edge (which
+    // also covers a tile's halo), the region across it; reading a region's lakes checks them against that
+    // region's neighbours, which are built on the spot. Looking a quarter region out queues those before
+    // generation reaches the edge, while it is still crossing tiles that need no inference. A first build takes minutes on CPU inference against under a minute per 1,024-block
     // tile, and only a first build is costly, since its model tensors stay on disk. Skipped while builds are
     // already waiting, so scans far from the generation front cannot pile up speculative work.
     public static void prefetch(WorldPipeline pipeline, int i0, int j0, int i1, int j1, float blockM) {
         if (BUILDERS.hasQueued()) return;
-        int reach = (int) Math.ceil(SEAM_BLEND_CELLS);
+        int reach = REGION_PX / 4;
         int ri0 = Math.floorDiv(i0 - reach, REGION_PX) - 1, ri1 = Math.floorDiv(i1 + reach - 1, REGION_PX) + 1;
         int rj0 = Math.floorDiv(j0 - reach, REGION_PX) - 1, rj1 = Math.floorDiv(j1 + reach - 1, REGION_PX) + 1;
         for (int ri = ri0; ri <= ri1; ri++) {
