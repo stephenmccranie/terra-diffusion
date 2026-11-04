@@ -203,8 +203,9 @@ public final class RiverHydrology {
 
     private static final float SEAM_BLEND_CELLS = 24f;
 
-    // A 3x3 neighbourhood, so regions prefetched ahead of generation do not evict the ones in use
-    private static final int MAX_CACHED_REGIONS = 9;
+    // Room for the regions in use, those prefetched half a region ahead and the seam neighbours both blend
+    // with, so prefetching does not evict a region generation still needs
+    private static final int MAX_CACHED_REGIONS = 16;
 
     // Hydrology regions built for one pipeline, least recently used evicted first.
     // Each region is built once; everyone who needs it waits for that one build.
@@ -238,12 +239,14 @@ public final class RiverHydrology {
         }
     }
 
-    // Queues every region within a quarter region of the native rectangle that nobody has asked for yet,
-    // so it is ready before generation reaches it. Skipped while builds are already waiting, so scans
+    // Queues every region within half a region of the native rectangle that nobody has asked for yet, so it
+    // is built while generation is still crossing tiles that need no inference, before it gets there. A
+    // build takes minutes on CPU inference against under a minute per 1,024-block tile, so a quarter
+    // region of lead left builds in generation's path. Skipped while builds are already waiting, so scans
     // far from the generation front cannot pile up speculative work.
     public static void prefetch(WorldPipeline pipeline, int i0, int j0, int i1, int j1, float blockM) {
         if (BUILDERS.hasQueued()) return;
-        int lead = REGION_PX / 4;
+        int lead = REGION_PX / 2;
         int ri0 = Math.floorDiv(i0 - lead, REGION_PX), ri1 = Math.floorDiv(i1 + lead - 1, REGION_PX);
         int rj0 = Math.floorDiv(j0 - lead, REGION_PX), rj1 = Math.floorDiv(j1 + lead - 1, REGION_PX);
         for (int ri = ri0; ri <= ri1; ri++) {
@@ -716,7 +719,11 @@ public final class RiverHydrology {
         if (region == null) {
             PriorityExecutor.Task<Region> mine = new PriorityExecutor.Task<>(() -> {
                 try {
-                    return build(pipeline, regionI, regionJ, blockM);
+                    long start = System.nanoTime();
+                    Region built = build(pipeline, regionI, regionJ, blockM);
+                    LOG.info("River region {} {} built in {} s", regionI, regionJ,
+                            Math.round((System.nanoTime() - start) / 1.0e9));
+                    return built;
                 } catch (Throwable e) {
                     cache.regions.remove(k);
                     LOG.error("River region {} {} failed to build", regionI, regionJ, e);
