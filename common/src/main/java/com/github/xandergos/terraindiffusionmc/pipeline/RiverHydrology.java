@@ -203,8 +203,8 @@ public final class RiverHydrology {
 
     private static final float SEAM_BLEND_CELLS = 24f;
 
-    // Room for the regions in use, those prefetched half a region ahead and the seam neighbours both blend
-    // with, so prefetching does not evict a region generation still needs
+    // Room for the regions in use and every neighbour prefetched around them, so prefetching does not evict a
+    // region generation still needs
     private static final int MAX_CACHED_REGIONS = 16;
 
     // Hydrology regions built for one pipeline, least recently used evicted first.
@@ -239,14 +239,15 @@ public final class RiverHydrology {
         }
     }
 
-    // Queues every region within half a region of the native rectangle that nobody has asked for yet, so it
-    // is built while generation is still crossing tiles that need no inference, before it gets there. A
-    // build takes minutes on CPU inference against under a minute per 1,024-block tile, so a quarter
-    // region of lead left builds in generation's path. Skipped while builds are already waiting, so scans
-    // far from the generation front cannot pile up speculative work.
+    // Queues every region within a region of the native rectangle that nobody has asked for yet: each
+    // neighbour of the region in use, which seams blend with and whose lakes are checked against, so it is
+    // built while generation is still crossing tiles that need no inference. A first build takes minutes on
+    // CPU inference against under a minute per 1,024-block tile, and only a first build is costly, since its
+    // model tensors stay on disk. Skipped while builds are already waiting, so scans far from the
+    // generation front cannot pile up speculative work.
     public static void prefetch(WorldPipeline pipeline, int i0, int j0, int i1, int j1, float blockM) {
         if (BUILDERS.hasQueued()) return;
-        int lead = REGION_PX / 2;
+        int lead = REGION_PX;
         int ri0 = Math.floorDiv(i0 - lead, REGION_PX), ri1 = Math.floorDiv(i1 + lead - 1, REGION_PX);
         int rj0 = Math.floorDiv(j0 - lead, REGION_PX), rj1 = Math.floorDiv(j1 + lead - 1, REGION_PX);
         for (int ri = ri0; ri <= ri1; ri++) {
