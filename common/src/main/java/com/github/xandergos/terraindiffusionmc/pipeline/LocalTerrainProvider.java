@@ -448,6 +448,7 @@ public final class LocalTerrainProvider {
         float[] bed = new float[H * W];
         float[] water = new float[H * W];
         WaterNetwork.Sample sample = new WaterNetwork.Sample();
+        WaterNetwork.Reaches rivers = new WaterNetwork.Reaches();
         float toNative = coordScale == 1 ? scale : 1;
 
         for (int r = 0; r < H; r++) {
@@ -456,13 +457,10 @@ public final class LocalTerrainProvider {
                 int idx = r * W + c;
                 float nativeI = (i1 + r) / toNative;
                 float nativeJ = (j1 + c) / toNative;
-                float[] ch = RiverHydrology.sampleChannel(pipeline, nativeI, nativeJ, metersPerBlock);
+                RiverHydrology.sampleRivers(pipeline, nativeI, nativeJ, metersPerBlock, rivers);
                 float[] lk = RiverHydrology.sampleLake(pipeline, nativeI, nativeJ, metersPerBlock);
-                WaterNetwork.sample((j1 + c) * coordScale, (i1 + r) * coordScale, ground[idx], smooth[idx],
-                        ch == null ? -1f : ch[0] * scale, ch == null ? 0f : ch[1],
-                        ch == null ? 0f : ch[2], ch == null ? 0f : ch[3],
-                        lk == null ? WaterNetwork.NO_WATER : lk[0], lk == null ? 0f : lk[1],
-                        metersPerBlock, sample);
+                WaterNetwork.sample((j1 + c) * coordScale, (i1 + r) * coordScale, ground[idx], smooth[idx], rivers,
+                        lk == null ? WaterNetwork.NO_WATER : lk[0], lk == null ? 0f : lk[1], metersPerBlock, sample);
                 bed[idx] = sample.bedElevM;
                 water[idx] = sample.waterSurfaceM;
             }

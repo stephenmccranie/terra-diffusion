@@ -1,7 +1,11 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
-// Shapes one column's ground and water from the river and lake fields at that column alone, so a column
-// comes out the same whichever tile computes it
+// Shapes one column's ground and water from the rivers and lake fields at that column alone, so a column comes out
+// the same whichever tile computes it. Every river has the same cross-section about its centreline: a channel that
+// holds its water, a floodplain cut flat a bank above that water, and valley walls rising beyond the floodplain at a
+// fixed slope. A column inside a channel takes the water of the nearest channel holding it and is carved to the
+// deepest channel at that level; any other column is cut down to the lowest floodplain or wall over it, and never
+// left below the water of a channel beside it.
 public final class WaterNetwork {
 
     public static final float NO_WATER = -1.0e9f;
@@ -10,25 +14,24 @@ public final class WaterNetwork {
 
     private static final FastNoiseLite BANK_ROUGH = makeFnl(0x1F55, 1f / 11f, 2, 2f, 0.55f);
 
-    // How far the valley reaches from the centreline, in channel half-widths
-    static final float VALLEY_WIDTHS = 2.5f;
+    // Widest a channel is drawn, as a share above its width
+    static final float WIDTH_VARIATION = 0.25f;
 
     // Shallowest drawn channel, in blocks
     private static final float MIN_DEPTH_BLOCKS = 1.5f;
 
-    // Width of the soft floor that keeps a channel's bed below its water, in blocks
-    private static final float SOFT_MIN_BLOCKS = 1.5f;
-
     // Share of the half-width carved to full depth before the bed rises to the bank
     private static final float CHANNEL_FLAT_FRACTION = 0.55f;
 
-    // Widest a channel is drawn, as a share above its width
-    static final float WIDTH_VARIATION = 0.25f;
+    // A floodplain lies this many blocks above its river's water
+    private static final float BANK_BLOCKS = 1f;
+
+    // Valley walls rise this many metres per metre beyond the floodplain, and cut ground up to this many blocks
+    // above it
+    private static final float WALL_SLOPE = 1.5f;
+    private static final float WALL_RISE_BLOCKS = 40f;
 
     private static final float BANK_ROUGH_BLOCKS = 0.9f;
-
-    // A river reaching the sea is cut through ground this close above sea level
-    private static final float MOUTH_BAR_BLOCKS = 2f;
 
     // A channel runs on into the sea floor down to this depth
     private static final float MOUTH_FADE_BLOCKS = 6f;
@@ -43,6 +46,40 @@ public final class WaterNetwork {
 
         public boolean hasWater() {
             return waterSurfaceM > NO_WATER;
+        }
+    }
+
+    // The rivers near one column, each as the point of one of its segments nearest the column: the distance to it,
+    // and the water level, width, depth and floodplain half-width there, all in metres
+    static final class Reaches {
+        private static final int FIELDS = 5;
+        private float[] v = new float[FIELDS * 16];
+        private int count;
+
+        void clear() {
+            count = 0;
+        }
+
+        void add(float distanceM, float levelM, float widthM, float depthM, float floodplainM) {
+            if ((count + 1) * FIELDS > v.length) v = java.util.Arrays.copyOf(v, v.length * 2);
+            int o = count++ * FIELDS;
+            v[o] = distanceM;
+            v[o + 1] = levelM;
+            v[o + 2] = widthM;
+            v[o + 3] = depthM;
+            v[o + 4] = floodplainM;
+        }
+
+        int count() {
+            return count;
+        }
+
+        float distance(int k) {
+            return v[k * FIELDS];
+        }
+
+        float width(int k) {
+            return v[k * FIELDS + 2];
         }
     }
 
@@ -77,11 +114,17 @@ public final class WaterNetwork {
         return (float) Math.ceil(Math.floor(meters / metersPerBlock) * metersPerBlock);
     }
 
-    // distBlocks is the distance to the nearest channel centreline, negative away from every river. Water is
-    // drawn only inside a channel or a lake; beside a channel the ground rises at least to the water's level,
-    // so no dry column lies below water next to it.
-    public static void sample(int worldX, int worldZ, float elevM, float smoothElevM,
-                              float distBlocks, float levelM, float widthM, float depthM,
+    // A river's water surface, whole blocks up from sea level
+    private static float water(float levelM, float metersPerBlock) {
+        return levelM > 0f ? snapToBlock(levelM, metersPerBlock) : 0f;
+    }
+
+    // Farthest a river with this floodplain half-width shapes the ground, in metres
+    static float reachM(float floodplainM, float metersPerBlock) {
+        return floodplainM + WALL_RISE_BLOCKS * metersPerBlock / WALL_SLOPE;
+    }
+
+    public static void sample(int worldX, int worldZ, float elevM, float smoothElevM, Reaches rivers,
                               float lakeSurfaceM, float lakeDeepM, float metersPerBlock, Sample out) {
         out.bedElevM = elevM;
         out.waterSurfaceM = NO_WATER;
@@ -92,44 +135,58 @@ public final class WaterNetwork {
             return;
         }
 
-        float surfaceM = levelM > 0f ? snapToBlock(levelM, metersPerBlock) : 0f;
-
-        boolean nearRiver = distBlocks >= 0f;
-        float halfWidth = 0.5f * widthM / metersPerBlock
-                * (1f + WIDTH_VARIATION * Math.max(0f, WIDTH_VAR.GetNoise(worldX, worldZ)));
-        float inner = CHANNEL_FLAT_FRACTION * halfWidth;
-        float channel = !nearRiver ? 0f
-                : distBlocks <= inner ? 1f : fadeOut((distBlocks - inner) / (halfWidth - inner));
-        float valley = !nearRiver ? 0f : fadeOut(distBlocks / (halfWidth * VALLEY_WIDTHS));
-
-        boolean inBasin = lakeSurfaceM > NO_WATER;
-        float groundM = elevM + (smoothElevM - elevM) * (inBasin ? 1f : valley);
-        float riverDepth = Math.max(MIN_DEPTH_BLOCKS * metersPerBlock, depthM);
+        float widen = 1f + WIDTH_VARIATION * Math.max(0f, WIDTH_VAR.GetNoise(worldX, worldZ));
+        float bank = BANK_BLOCKS * metersPerBlock;
+        float minDepth = MIN_DEPTH_BLOCKS * metersPerBlock;
+        float[] v = rivers.v;
+        float surfaceM = NO_WATER, nearest = Float.MAX_VALUE;
+        for (int k = 0; k < rivers.count; k++) {
+            int o = k * Reaches.FIELDS;
+            float d = v[o];
+            if (d < 0.5f * v[o + 2] * widen && d < nearest) {
+                nearest = d;
+                surfaceM = water(v[o + 1], metersPerBlock);
+            }
+        }
+        float channelBed = Float.MAX_VALUE, carve = 0f;
+        float cut = Float.MAX_VALUE, held = -Float.MAX_VALUE, near = 0f;
+        for (int k = 0; k < rivers.count; k++) {
+            int o = k * Reaches.FIELDS;
+            float d = v[o];
+            float halfWidth = 0.5f * v[o + 2] * widen;
+            float floodplain = Math.max(halfWidth, v[o + 4]);
+            float w = water(v[o + 1], metersPerBlock);
+            near = Math.max(near, fadeOut(d / floodplain));
+            if (d < halfWidth) {
+                if (Math.abs(w - surfaceM) > 0.5f * metersPerBlock) continue;
+                float inner = CHANNEL_FLAT_FRACTION * halfWidth;
+                float shape = d <= inner ? 1f : fadeOut((d - inner) / (halfWidth - inner));
+                float depth = Math.max(minDepth, v[o + 3]) * shape;
+                channelBed = Math.min(channelBed, w - depth);
+                carve = Math.max(carve, depth);
+            } else {
+                cut = Math.min(cut, w + bank + Math.max(0f, d - floodplain) * WALL_SLOPE);
+                held = Math.max(held, w - (d - halfWidth));
+            }
+        }
 
         if (submarine) {
-            out.bedElevM = elevM - riverDepth * channel * seaFade;
+            out.bedElevM = elevM - carve * seaFade;
             return;
         }
 
-        float bed = groundM + (surfaceM - groundM) * valley - riverDepth * channel;
-
-        float need = surfaceM - MIN_DEPTH_BLOCKS * metersPerBlock;
-        float k = SOFT_MIN_BLOCKS * metersPerBlock;
-        float h = clamp01(0.5f + 0.5f * (bed - need) / k);
-        float soft = bed + (need - bed) * h - k * h * (1f - h);
-        bed += (soft - bed) * channel;
-
-        // A river that has come all the way down to sea level can still be left short of the sea
-        if (surfaceM <= 0f && valley > 0f && groundM < MOUTH_BAR_BLOCKS * metersPerBlock) {
-            bed = Math.min(bed, groundM + (-metersPerBlock - groundM) * valley);
+        boolean inBasin = lakeSurfaceM > NO_WATER;
+        float groundM = elevM + (smoothElevM - elevM) * (inBasin ? 1f : near);
+        float bed;
+        if (surfaceM > NO_WATER) {
+            bed = Math.min(groundM, channelBed);
+        } else {
+            float rough = BANK_ROUGH.GetNoise(worldX, worldZ) * BANK_ROUGH_BLOCKS * metersPerBlock;
+            bed = Math.min(groundM, cut + rough);
+            if (!inBasin) {
+                bed = Math.max(bed, held);
+            }
         }
-
-        float roughened = bed + BANK_ROUGH.GetNoise(worldX, worldZ) * BANK_ROUGH_BLOCKS * metersPerBlock
-                * valley * (1f - channel);
-        if (bed >= surfaceM) {
-            roughened = Math.max(roughened, surfaceM);
-        }
-        bed = Math.min(roughened, groundM);
 
         if (inBasin && lakeDeepM > 0.01f) {
             float here = Math.max(0f, lakeSurfaceM - groundM);
@@ -140,14 +197,9 @@ public final class WaterNetwork {
             float shaped = bed + (lakeSurfaceM - target * t - bed) * t;
             bed = Math.min(shaped, Math.max(bed, lakeSurfaceM - 0.6f * metersPerBlock));
         }
-
-        boolean inChannel = nearRiver && distBlocks <= halfWidth;
-        if (nearRiver && !inChannel && !inBasin) {
-            bed = Math.max(bed, surfaceM - (distBlocks - halfWidth) * metersPerBlock);
-        }
         out.bedElevM = bed;
 
-        if (inChannel && drawnBlock(surfaceM, metersPerBlock) > drawnBlock(bed, metersPerBlock)) {
+        if (surfaceM > NO_WATER && drawnBlock(surfaceM, metersPerBlock) > drawnBlock(bed, metersPerBlock)) {
             out.waterSurfaceM = surfaceM;
         }
         if (inBasin && bed < lakeSurfaceM && lakeSurfaceM > out.waterSurfaceM) {

@@ -2,22 +2,25 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import java.util.Arrays;
 
-// The river centrelines a region owns, as segments between points along each river with the water level, width
-// and depth at both ends. A region owns the segments that start in it, so each stretch of river exists once and
+// The river centrelines a region owns, as segments between points along each river with the water level, width,
+// depth and floodplain half-width at both ends. A region owns the segments that start in it, so each stretch of river exists once and
 // the rivers of neighbouring regions meet where one region's last segment ends on the other's first. A bucket
 // index finds the segments near a point.
 final class RiverNetwork {
 
-    // Floats per segment: native i, j, water level, width and depth at its upstream end, then at its downstream end
-    private static final int STRIDE = 10;
+    // Floats per segment: native i, j, water level, width, depth and floodplain half-width at its upstream end, then
+    // at its downstream end
+    private static final int END = 6, STRIDE = 2 * END;
 
     private static final int BUCKET = 16;
 
-    // Farthest a region's rivers reach past its edges, in native cells
-    static final int REACH_CELLS = 64;
+    // A river's floodplain reaches this many of its half-widths beyond its channel where it runs flat, and none
+    // where it falls this steeply or more
+    private static final float FLOODPLAIN_WIDTHS = 3f;
+    private static final float STEEP_SLOPE = 0.02f;
 
-    // A channel shapes the ground out to this many of its half-widths
-    static final float INFLUENCE_WIDTHS = WaterNetwork.VALLEY_WIDTHS * (1f + WaterNetwork.WIDTH_VARIATION);
+    // Points on either side over which a river's fall is measured
+    private static final int SLOPE_HALF = 8;
 
     // The water of a river lies this many blocks below the valley floor it runs along
     private static final float FREEBOARD_BLOCKS = 1f;
@@ -35,26 +38,30 @@ final class RiverNetwork {
     private static final int SMOOTH_PASSES = 3;
 
     private final float[] seg;
+    private final float blockM;
     private final int originI, originJ, side;
     // Segments of bucket b are members[first[b]] up to members[first[b + 1]]
     private final int[] first, members;
 
-    private RiverNetwork(float[] seg, int count, int regionI, int regionJ, int regionPx) {
+    private RiverNetwork(float[] seg, int count, int regionI, int regionJ, int regionPx, float blockM) {
         this.seg = Arrays.copyOf(seg, count * STRIDE);
-        originI = regionI * regionPx - REACH_CELLS;
-        originJ = regionJ * regionPx - REACH_CELLS;
-        side = (regionPx + 2 * REACH_CELLS + BUCKET - 1) / BUCKET;
+        this.blockM = blockM;
+        int reach = (int) Math.ceil(reachCells(blockM));
+        originI = regionI * regionPx - reach;
+        originJ = regionJ * regionPx - reach;
+        side = (regionPx + 2 * reach + BUCKET - 1) / BUCKET;
         first = new int[side * side + 1];
         for (int pass = 0; pass < 2; pass++) {
             int[] fill = pass == 0 ? null : Arrays.copyOf(first, side * side);
             int[] out = pass == 0 ? null : new int[first[side * side]];
             for (int s = 0; s < count; s++) {
                 int o = s * STRIDE;
-                float r = INFLUENCE_WIDTHS * 0.5f * Math.max(seg[o + 3], seg[o + 8]) / RiverHydrology.CELL_SIZE_M;
-                int b0 = bucket(Math.min(seg[o], seg[o + 5]) - r - originI);
-                int b1 = bucket(Math.max(seg[o], seg[o + 5]) + r - originI);
-                int c0 = bucket(Math.min(seg[o + 1], seg[o + 6]) - r - originJ);
-                int c1 = bucket(Math.max(seg[o + 1], seg[o + 6]) + r - originJ);
+                float r = WaterNetwork.reachM(Math.max(seg[o + 5], seg[o + END + 5]), blockM)
+                        / RiverHydrology.CELL_SIZE_M;
+                int b0 = bucket(Math.min(seg[o], seg[o + END]) - r - originI);
+                int b1 = bucket(Math.max(seg[o], seg[o + END]) + r - originI);
+                int c0 = bucket(Math.min(seg[o + 1], seg[o + END + 1]) - r - originJ);
+                int c1 = bucket(Math.max(seg[o + 1], seg[o + END + 1]) + r - originJ);
                 for (int bi = b0; bi <= b1; bi++) {
                     for (int bj = c0; bj <= c1; bj++) {
                         if (pass == 0) first[bi * side + bj + 1]++;
@@ -76,31 +83,32 @@ final class RiverNetwork {
         return Math.max(0, Math.min(side - 1, (int) Math.floor(offset / BUCKET)));
     }
 
-    // Writes {distance in native cells, water level, width, depth} at the segment nearest (i, j) relative to its
-    // half-width into out, if that is nearer than best, and returns the nearest relative distance so far
-    float nearest(float i, float j, float[] out, float best) {
+    // Farthest a region's rivers reach past its edges, in native cells: its widest floodplain and walls beyond the
+    // last of its points, a cell past its edge
+    static float reachCells(float blockM) {
+        float widest = 0.5f * RiverHydrology.MAX_WIDTH_M
+                * (1f + WaterNetwork.WIDTH_VARIATION + FLOODPLAIN_WIDTHS);
+        return 2f + WaterNetwork.reachM(widest, blockM) / RiverHydrology.CELL_SIZE_M;
+    }
+
+    // Adds the point nearest (i, j) of every segment whose river shapes the ground there
+    void gather(float i, float j, WaterNetwork.Reaches out) {
         int bi = (int) Math.floor((i - originI) / BUCKET), bj = (int) Math.floor((j - originJ) / BUCKET);
-        if (bi < 0 || bj < 0 || bi >= side || bj >= side) return best;
+        if (bi < 0 || bj < 0 || bi >= side || bj >= side) return;
         int b = bi * side + bj;
         for (int m = first[b]; m < first[b + 1]; m++) {
             int o = members[m] * STRIDE;
             float ai = seg[o], aj = seg[o + 1];
-            float di = seg[o + 5] - ai, dj = seg[o + 6] - aj;
+            float di = seg[o + END] - ai, dj = seg[o + END + 1] - aj;
             float len2 = di * di + dj * dj;
             float t = len2 > 0f ? Math.max(0f, Math.min(1f, ((i - ai) * di + (j - aj) * dj) / len2)) : 0f;
             float oi = ai + di * t - i, oj = aj + dj * t - j;
-            float d = (float) Math.sqrt(oi * oi + oj * oj);
-            float width = lerp(seg[o + 3], seg[o + 8], t);
-            float relative = d / (0.5f * width / RiverHydrology.CELL_SIZE_M);
-            if (relative < best) {
-                best = relative;
-                out[0] = d;
-                out[1] = lerp(seg[o + 2], seg[o + 7], t);
-                out[2] = width;
-                out[3] = lerp(seg[o + 4], seg[o + 9], t);
-            }
+            float d = RiverHydrology.CELL_SIZE_M * (float) Math.sqrt(oi * oi + oj * oj);
+            float floodplain = lerp(seg[o + 5], seg[o + END + 5], t);
+            if (d >= WaterNetwork.reachM(floodplain, blockM)) continue;
+            out.add(d, lerp(seg[o + 2], seg[o + END + 2], t), lerp(seg[o + 3], seg[o + END + 3], t),
+                    lerp(seg[o + 4], seg[o + END + 4], t), floodplain);
         }
-        return best;
     }
 
     private static float lerp(float a, float b, float t) {
@@ -194,7 +202,8 @@ final class RiverNetwork {
         float[] pi = new float[n], pj = new float[n];
         int cap = n + 2;
         float[] ci = new float[cap], cj = new float[cap], tmpI = new float[cap], tmpJ = new float[cap];
-        float[] lv = new float[cap], wd = new float[cap], dp = new float[cap];
+        float[] lv = new float[cap], wd = new float[cap], dp = new float[cap], fp = new float[cap];
+        float[] run = new float[cap];
         int[] at = new int[cap], node = new int[cap];
         float[] seg = new float[STRIDE * 1024];
         int count = 0;
@@ -215,8 +224,9 @@ final class RiverNetwork {
             }
             int join = dn[last], end = down[cell[last]];
             if (join >= 0) {
-                int i = cell[join];
-                m = point(ci, cj, lv, wd, dp, at, node, m, pi[join], pj[join], level[join], width[i], depth[i], i, -1);
+                int i = cell[last];
+                m = point(ci, cj, lv, wd, dp, at, node, m, pi[join], pj[join], level[join], width[i], depth[i],
+                        cell[join], -1);
             } else if (end >= 0 && water[end]) {
                 int i = cell[last];
                 m = point(ci, cj, lv, wd, dp, at, node, m, windowI + end / grid, windowJ + end % grid,
@@ -232,6 +242,18 @@ final class RiverNetwork {
                 pj[k] = cj[p];
             }
 
+            // A river spreads a floodplain the flatter it runs
+            run[0] = 0f;
+            for (int p = 1; p < m; p++) {
+                run[p] = run[p - 1] + (float) Math.hypot(ci[p] - ci[p - 1], cj[p] - cj[p - 1]);
+            }
+            for (int p = 0; p < m; p++) {
+                int a = Math.max(0, p - SLOPE_HALF), b = Math.min(m - 1, p + SLOPE_HALF);
+                float fall = run[b] > run[a] ? (lv[a] - lv[b]) / ((run[b] - run[a]) * RiverHydrology.CELL_SIZE_M) : 0f;
+                float flat = Math.max(0f, 1f - fall / STEEP_SLOPE);
+                fp[p] = 0.5f * wd[p] * (1f + WaterNetwork.WIDTH_VARIATION + FLOODPLAIN_WIDTHS * flat);
+            }
+
             for (int p = 0; p + 1 < m; p++) {
                 if (Math.floorDiv(windowI + at[p] / grid, regionPx) != regionI
                         || Math.floorDiv(windowJ + at[p] % grid, regionPx) != regionJ) {
@@ -240,16 +262,17 @@ final class RiverNetwork {
                 if (count * STRIDE + STRIDE > seg.length) seg = Arrays.copyOf(seg, seg.length * 2);
                 int o = count++ * STRIDE;
                 for (int e = 0; e < 2; e++) {
-                    int q = p + e, f = o + 5 * e;
+                    int q = p + e, f = o + END * e;
                     seg[f] = ci[q];
                     seg[f + 1] = cj[q];
                     seg[f + 2] = lv[q];
                     seg[f + 3] = wd[q];
                     seg[f + 4] = dp[q];
+                    seg[f + 5] = fp[q];
                 }
             }
         }
-        return new RiverNetwork(seg, count, regionI, regionJ, regionPx);
+        return new RiverNetwork(seg, count, regionI, regionJ, regionPx, blockM);
     }
 
     private static int point(float[] ci, float[] cj, float[] lv, float[] wd, float[] dp, int[] at, int[] node, int m,

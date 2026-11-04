@@ -52,7 +52,7 @@ public final class RiverHydrology {
     private static final float WIDTH_Q_EXPONENT = 0.75f;
     private static final float DEPTH_Q_EXPONENT = 0.4f;
 
-    private static final float MAX_WIDTH_M = 720f;
+    static final float MAX_WIDTH_M = 720f;
     private static final float MAX_DEPTH_M = 45f;
 
     private static final int CONFINEMENT_SCAN_CELLS = 16;
@@ -237,18 +237,16 @@ public final class RiverHydrology {
         return region == null || region.karst == null ? KarstNetwork.EMPTY : region.karst;
     }
 
-    // {distance to the centreline in native cells, water level, width, depth} of the channel nearest relative to its
-    // width, or null beyond every channel's reach. A region's rivers reach past its edges, so near an edge the
-    // region beyond it is asked too.
-    public static float[] sampleChannel(WorldPipeline pipeline, float nativeI, float nativeJ,
-                                       float blockM) {
+    // Gathers the rivers that shape the ground at a native point into out. A region's rivers reach past its edges, so
+    // near an edge the region beyond it is asked too.
+    public static void sampleRivers(WorldPipeline pipeline, float nativeI, float nativeJ, float blockM,
+                                    WaterNetwork.Reaches out) {
+        out.clear();
         int ri = Math.floorDiv((int) Math.floor(nativeI), REGION_PX);
         int rj = Math.floorDiv((int) Math.floor(nativeJ), REGION_PX);
         float fi = nativeI - ri * (float) REGION_PX, fj = nativeJ - rj * (float) REGION_PX;
-        float reach = RiverNetwork.REACH_CELLS;
+        float reach = RiverNetwork.reachCells(blockM);
         RegionCache cache = pipeline.hydrology;
-        float[] out = new float[4];
-        float best = RiverNetwork.INFLUENCE_WIDTHS;
         for (int di = -1; di <= 1; di++) {
             if (di < 0 ? fi >= reach : di > 0 && fi < REGION_PX - reach) continue;
             for (int dj = -1; dj <= 1; dj++) {
@@ -256,10 +254,9 @@ public final class RiverHydrology {
                 boolean own = di == 0 && dj == 0;
                 if (!own && !cache.seamNeighbours && !cache.regions.containsKey(key(ri + di, rj + dj))) continue;
                 Region region = regionFor(pipeline, ri + di, rj + dj, blockM);
-                if (region != null) best = region.rivers.nearest(nativeI, nativeJ, out, best);
+                if (region != null) region.rivers.gather(nativeI, nativeJ, out);
             }
         }
-        return best < RiverNetwork.INFLUENCE_WIDTHS ? out : null;
     }
 
     private static float lerp(float a, float b, float t) {
