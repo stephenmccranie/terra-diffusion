@@ -723,7 +723,9 @@ public final class WorldPipeline implements AutoCloseable {
           .append(";coarseStride=").append(COARSE_TILE_STRIDE)
           .append(";coarsePooling=").append(COARSE_POOLING)
           .append(";means=").append(java.util.Arrays.hashCode(MODEL_MEANS))
-          .append(";stds=").append(java.util.Arrays.hashCode(MODEL_STDS));
+          .append(";stds=").append(java.util.Arrays.hashCode(MODEL_STDS))
+          .append(";condSnr=").append(java.util.Arrays.toString(COND_SNR))
+          .append(";frequencyMult=").append(java.util.Arrays.toString(WorldPipelineModelConfig.frequencyMultipliers()));
         for (String model : new String[]{"coarse_model.onnx", "base_model.onnx", "decoder_model.onnx"}) {
             sb.append(';').append(model).append('=');
             try {
