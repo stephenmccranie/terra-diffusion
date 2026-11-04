@@ -19,7 +19,9 @@ public final class RiverHydrology {
 
     private static final int REGION_PX = 1024;
 
-    private static final int MARGIN_PX = 512;
+    // Land a region drains beyond each of its edges. A river's head catchment fits inside it, so the regions
+    // either side of a line drain the same land in full detail and agree on where every river begins.
+    private static final int MARGIN_PX = 1024;
     private static final int WINDOW_PX = REGION_PX + 2 * MARGIN_PX;
 
     private static final int GRID = WINDOW_PX;
@@ -238,7 +240,7 @@ public final class RiverHydrology {
         }
     }
 
-    // A region build holds about a gigabyte of working arrays, so at most two run at once
+    // A region build holds about two gigabytes of working arrays, so at most two run at once
     private static final PriorityExecutor BUILDERS = new PriorityExecutor("terrain-diffusion-hydrology", 2);
 
     private RiverHydrology() {
