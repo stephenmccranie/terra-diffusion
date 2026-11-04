@@ -33,11 +33,8 @@ public final class TerrainDiffusionConfig {
     // Inference device: "cpu", "gpu", or "auto" (try GPU then fall back to CPU)
     public static String inferenceDevice() {
         String device = readString("inference.device", "gpu");
-        // On the CPU build "gpu" is meaningless (no dedicated GPU provider), so treat it as "auto":
-        if ("cpu".equals(BUILD_VARIANT)) {
-            return "auto";
-        }
-        return device;
+        // The CPU build has no dedicated GPU provider, so "gpu" there means try CoreML, then the CPU
+        return "cpu".equals(BUILD_VARIANT) && "gpu".equals(device) ? "auto" : device;
     }
 
     // Whether to offload inactive models from VRAM between pipeline stages
