@@ -69,18 +69,6 @@ public final class WaterNetwork {
             v[o + 3] = depthM;
             v[o + 4] = floodplainM;
         }
-
-        int count() {
-            return count;
-        }
-
-        float distance(int k) {
-            return v[k * FIELDS];
-        }
-
-        float width(int k) {
-            return v[k * FIELDS + 2];
-        }
     }
 
     private WaterNetwork() {

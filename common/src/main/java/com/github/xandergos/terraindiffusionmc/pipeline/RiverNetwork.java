@@ -3,9 +3,9 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 import java.util.Arrays;
 
 // The river centrelines a region owns, as segments between points along each river with the water level, width,
-// depth and floodplain half-width at both ends. A region owns the segments that start in it, so each stretch of river exists once and
-// the rivers of neighbouring regions meet where one region's last segment ends on the other's first. A bucket
-// index finds the segments near a point.
+// depth and floodplain half-width at both ends. A region owns the segments that start in it, so each stretch of
+// river exists once and the rivers of neighbouring regions meet where one region's last segment ends on the other's
+// first. A bucket index finds the segments near a point.
 final class RiverNetwork {
 
     // Floats per segment: native i, j, water level, width, depth and floodplain half-width at its upstream end, then
@@ -22,6 +22,48 @@ final class RiverNetwork {
     // Points on either side over which a river's fall is measured
     private static final int SLOPE_HALF = 8;
 
+    // A river meanders in waves this many of its widths long down its valley, leaving the valley's line at up to
+    // this angle where it runs flat (a sine-generated curve, Langbein and Leopold 1966), so that no bend turns
+    // tighter than about its own width, and swings no farther than its valley floor or this many cells either side
+    private static final float MEANDER_WAVELENGTH_WIDTHS = 11f;
+    private static final float MEANDER_ANGLE = (float) Math.toRadians(42);
+    private static final int MAX_MEANDER_CELLS = 48;
+
+    // A river's meanders swing across its valley's line as it runs over this many of its widths to either side, so
+    // the valley turns slowly beneath even its widest swings
+    private static final float FRAME_WIDTHS = 1.5f;
+
+    // Meanders vary: each wave runs longer or shorter than the river's own by up to this share, so swings the farther
+    // the longer it runs, and every bend leans upstream by this much (the skew of a Kinoshita curve)
+    private static final float WAVE_JITTER = 0.3f;
+    private static final float SKEW = 0.25f;
+    private static final FastNoiseLite WAVES = makeWaves();
+
+    private static FastNoiseLite makeWaves() {
+        FastNoiseLite fnl = new FastNoiseLite(0x3A7E);
+        fnl.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
+        fnl.SetFractalType(FastNoiseLite.FractalType.FBm);
+        fnl.SetFrequency(0.5f);
+        fnl.SetFractalOctaves(2);
+        return fnl;
+    }
+
+    // A river's width and depth at its head; downstream they grow as powers of its discharge (Leopold and
+    // Maddock 1953). Width grows faster than nature's square root, since this world's basins span only a few
+    // tens of times a head's catchment and its main rivers must still grow wide enough to carry freight.
+    private static final float STREAM_WIDTH_M = 60f;
+    private static final float STREAM_DEPTH_M = 11f;
+    private static final float WIDTH_Q_EXPONENT = 0.75f;
+    private static final float DEPTH_Q_EXPONENT = 0.4f;
+
+    static final float MAX_WIDTH_M = 720f;
+    private static final float MAX_DEPTH_M = 45f;
+
+    // A river's valley floor is the ground within this height of it, found this many cells to either side; a
+    // valley narrower than the river holds it narrower and deeper
+    private static final float FLOOR_RISE_M = 18f;
+    private static final int CONFINEMENT_CELLS = 16;
+
     // The water of a river lies this many blocks below the valley floor it runs along
     private static final float FREEBOARD_BLOCKS = 1f;
 
@@ -33,8 +75,12 @@ final class RiverNetwork {
     // Deepest a river cuts below its valley floor, in its own depths, before it climbs back up in a waterfall
     private static final float CANYON_DEPTHS = 3f;
 
-    // Points a polyline is averaged over on either side, and how many times, to take the corners off its cells
+    // Points a river's line is averaged over on either side, and how many times, to take the corners off its cells:
+    // at least this many, and as many as its width in cells, rounded down to a power of two so the regions either
+    // side of a pin round alike. Its width, depth and valley floor are averaged over more, so a channel narrows,
+    // widens and swings gradually.
     private static final int SMOOTH_HALF = 2;
+    private static final int WIDTH_SMOOTH_HALF = 8;
     private static final int SMOOTH_PASSES = 3;
 
     private final float[] seg;
@@ -83,12 +129,12 @@ final class RiverNetwork {
         return Math.max(0, Math.min(side - 1, (int) Math.floor(offset / BUCKET)));
     }
 
-    // Farthest a region's rivers reach past its edges, in native cells: its widest floodplain and walls beyond the
-    // last of its points, a cell past its edge
+    // Farthest a region's rivers reach past its edges, in native cells: its widest floodplain and walls beyond its
+    // widest meander, from the last of its points, a cell past its edge
     static float reachCells(float blockM) {
-        float widest = 0.5f * RiverHydrology.MAX_WIDTH_M
+        float widest = 0.5f * MAX_WIDTH_M
                 * (1f + WaterNetwork.WIDTH_VARIATION + FLOODPLAIN_WIDTHS);
-        return 2f + WaterNetwork.reachM(widest, blockM) / RiverHydrology.CELL_SIZE_M;
+        return 2f + MAX_MEANDER_CELLS + WaterNetwork.reachM(widest, blockM) / RiverHydrology.CELL_SIZE_M;
     }
 
     // Adds the point nearest (i, j) of every segment whose river shapes the ground there
@@ -116,13 +162,12 @@ final class RiverNetwork {
     }
 
     // Traces the rivers of a drained window into the segments its region owns, and writes each river cell's water
-    // level into levelOut. Rivers are the channel cells: each sends its water to its down cell over ground filled
-    // to filled, carries acc of catchment, has its width and depth, and has its centre moved by its meander offset.
-    // A river begins in the lake it drains, if it drains one, and ends in the water its last cell drains to.
+    // level and width into levelOut and widthOut. Rivers are the channel cells: each sends its water to its down
+    // cell over ground filled to filled, and carries acc of catchment. A river begins in the lake it drains, if it
+    // drains one, and ends in the water its last cell drains to.
     static RiverNetwork trace(int regionI, int regionJ, int regionPx, int windowI, int windowJ, int grid,
-                              boolean[] channel, int[] down, float[] acc, float[] filled, float[] width,
-                              float[] depth, float[] offR, float[] offC, boolean[] water, float[] waterLevel,
-                              float blockM, float[] levelOut) {
+                              boolean[] channel, int[] down, float[] acc, float[] filled, float[] elev,
+                              boolean[] water, float[] waterLevel, float blockM, float[] levelOut, float[] widthOut) {
         int n = 0;
         for (boolean c : channel) if (c) n++;
         int[] cell = new int[n];
@@ -148,32 +193,6 @@ final class RiverNetwork {
         }
         int[] rank = hopsToMouth(dn);
 
-        // The water surface, graded from each mouth upstream: it keeps a freeboard below the valley floor and rises
-        // no faster than the river's slope allows; where that would cut deeper than a canyon, the river climbs back
-        // to its valley floor in a waterfall
-        float[] level = new float[n];
-        for (int k : byRank(rank)) {
-            int i = cell[k], d = down[i];
-            float ceiling = filled[i] - FREEBOARD_BLOCKS * blockM;
-            float base, run;
-            if (dn[k] >= 0) {
-                base = level[dn[k]];
-                run = stepM(i, d, grid);
-            } else if (d >= 0 && water[d]) {
-                base = waterLevel[d];
-                run = stepM(i, d, grid);
-            } else {
-                base = ceiling;
-                run = 0f;
-            }
-            float q = acc[i] / RiverHydrology.STREAM_CELLS;
-            float graded = base + HEAD_SLOPE * (float) Math.pow(q, -SLOPE_Q_EXPONENT) * run;
-            float w = Math.min(ceiling, graded);
-            if (ceiling - w > CANYON_DEPTHS * depth[i]) w = ceiling;
-            level[k] = Math.max(base, w);
-            levelOut[i] = level[k];
-        }
-
         // A chain runs from a head down its main stem, to a mouth or to where it joins a larger stem. Chains are
         // laid out downstream first, so a stem is placed before the tributaries that join it.
         int heads = 0;
@@ -197,94 +216,292 @@ final class RiverNetwork {
         }
         Arrays.sort(order);
 
-        // Each chain's points: where it is, its water level, width and depth, the window cell it belongs to, and
-        // the node it is, or -1 for an end it shares with water or a larger stem, which stays where that is
-        float[] pi = new float[n], pj = new float[n];
-        int cap = n + 2;
-        float[] ci = new float[cap], cj = new float[cap], tmpI = new float[cap], tmpJ = new float[cap];
-        float[] lv = new float[cap], wd = new float[cap], dp = new float[cap], fp = new float[cap];
-        float[] run = new float[cap];
-        int[] at = new int[cap], node = new int[cap];
+        // Per node: where its valley runs, where its channel runs, and its water level, width and depth
+        float[] vi = new float[n], vj = new float[n], pi = new float[n], pj = new float[n];
+        float[] level = new float[n], width = new float[n], depth = new float[n];
+        Chain ch = new Chain(n + 2);
+        long own = (long) regionI << 32 | (regionJ & 0xFFFFFFFFL);
         float[] seg = new float[STRIDE * 1024];
         int count = 0;
         for (long packed : order) {
             int h = (int) packed;
             int s0 = chainStart[h], s1 = chainStart[h + 1];
             int head = chained[s0], last = chained[s1 - 1];
-            int m = 0;
-            int lakeIn = drainedLake(cell[head], down, water, acc, grid);
-            if (lakeIn >= 0) {
-                m = point(ci, cj, lv, wd, dp, at, node, m, windowI + lakeIn / grid, windowJ + lakeIn % grid,
-                        waterLevel[lakeIn], width[cell[head]], depth[cell[head]], lakeIn, -1);
-            }
-            for (int s = s0; s < s1; s++) {
-                int k = chained[s], i = cell[k];
-                m = point(ci, cj, lv, wd, dp, at, node, m, windowI + i / grid, windowJ + i % grid,
-                        level[k], width[i], depth[i], i, k);
-            }
             int join = dn[last], end = down[cell[last]];
-            if (join >= 0) {
-                int i = cell[last];
-                m = point(ci, cj, lv, wd, dp, at, node, m, pi[join], pj[join], level[join], width[i], depth[i],
-                        cell[join], -1);
-            } else if (end >= 0 && water[end]) {
-                int i = cell[last];
-                m = point(ci, cj, lv, wd, dp, at, node, m, windowI + end / grid, windowJ + end % grid,
-                        waterLevel[end], width[i], depth[i], end, -1);
+            boolean outflow = join < 0 && end >= 0 && water[end];
+            int lakeIn = drainedLake(cell[head], down, water, acc, grid);
+
+            // The valley: the chain's cells, ending where the stem it joins runs, averaged over the width of channel
+            // its discharge would carve
+            ch.m = 0;
+            if (lakeIn >= 0) ch.add(windowI + lakeIn / grid, windowJ + lakeIn % grid, lakeIn, -1);
+            for (int s = s0; s < s1; s++) {
+                int i = cell[chained[s]];
+                ch.add(windowI + i / grid, windowJ + i % grid, i, chained[s]);
             }
-            smooth(ci, cj, m, tmpI, tmpJ);
+            if (join >= 0) ch.add(vi[join], vj[join], cell[join], -1);
+            else if (outflow) ch.add(windowI + end / grid, windowJ + end % grid, end, -1);
+            int m = ch.m;
+            int firstNode = lakeIn >= 0 ? 1 : 0, lastNode = m - (join >= 0 || outflow ? 2 : 1);
             for (int p = 0; p < m; p++) {
-                int k = node[p];
+                int k = ch.node[Math.max(firstNode, Math.min(lastNode, p))];
+                double q = acc[cell[k]] / RiverHydrology.STREAM_CELLS;
+                ch.wd[p] = (float) Math.min(MAX_WIDTH_M, STREAM_WIDTH_M * Math.pow(q, WIDTH_Q_EXPONENT));
+                ch.dp[p] = (float) Math.min(MAX_DEPTH_M, STREAM_DEPTH_M * Math.pow(q, DEPTH_Q_EXPONENT));
+                ch.half[p] = Math.max(SMOOTH_HALF,
+                        Integer.highestOneBit(Math.max(1, (int) (ch.wd[p] / RiverHydrology.CELL_SIZE_M))));
+            }
+            smooth(ch.ci, ch.cj, m, ch.tmpI, ch.tmpJ, ch.half);
+            ch.frame();
+
+            // Each node's channel, sized by its discharge and held by its valley floor
+            for (int p = 0; p < m; p++) {
+                int k = ch.node[p];
                 if (k < 0) continue;
-                ci[p] += offR[cell[k]];
-                cj[p] += offC[cell[k]];
-                pi[k] = ci[p];
-                pj[k] = cj[p];
+                float r = ch.ci[p] - windowI, c = ch.cj[p] - windowJ;
+                float base = sampleGrid(elev, grid, r, c);
+                ch.roomPos[p] = floorCells(elev, grid, r, c, ch.ni[p], ch.nj[p], base);
+                ch.roomNeg[p] = floorCells(elev, grid, r, c, -ch.ni[p], -ch.nj[p], base);
+                float floor = RiverHydrology.CELL_SIZE_M * Math.max(1f,
+                        Math.min(CONFINEMENT_CELLS, ch.roomPos[p]) + Math.min(CONFINEMENT_CELLS, ch.roomNeg[p]));
+                float held = Math.min(ch.wd[p], floor);
+                ch.dp[p] *= (float) Math.sqrt(Math.min(2f, ch.wd[p] / held));
+                ch.wd[p] = held;
+                vi[k] = ch.ci[p];
+                vj[k] = ch.cj[p];
+            }
+            if (lakeIn >= 0) {
+                ch.wd[0] = ch.wd[1];
+                ch.dp[0] = ch.dp[1];
+                ch.lv[0] = waterLevel[lakeIn];
+            }
+            if (join >= 0 || outflow) {
+                ch.wd[m - 1] = ch.wd[m - 2];
+                ch.dp[m - 1] = ch.dp[m - 2];
+                ch.lv[m - 1] = join >= 0 ? level[join] : waterLevel[end];
+            }
+            Arrays.fill(ch.half, 0, m, WIDTH_SMOOTH_HALF);
+            smooth(ch.wd, ch.dp, m, ch.tmpI, ch.tmpJ, ch.half);
+            smooth(ch.roomPos, ch.roomNeg, m, ch.tmpI, ch.tmpJ, ch.half);
+            for (int p = firstNode; p <= lastNode; p++) {
+                width[ch.node[p]] = ch.wd[p];
+                depth[ch.node[p]] = ch.dp[p];
             }
 
-            // A river spreads a floodplain the flatter it runs
-            run[0] = 0f;
+            // The water surface, graded from the mouth upstream: it keeps a freeboard below the valley floor and
+            // rises no faster than the river's slope allows; where that would cut deeper than a canyon, the river
+            // climbs back to its valley floor in a waterfall
+            for (int p = lastNode; p >= firstNode; p--) {
+                int k = ch.node[p], i = cell[k];
+                float ceiling = filled[i] - FREEBOARD_BLOCKS * blockM;
+                float lv;
+                if (p == m - 1) {
+                    lv = ceiling;
+                } else {
+                    float base = ch.lv[p + 1];
+                    double q = acc[i] / RiverHydrology.STREAM_CELLS;
+                    float slope = HEAD_SLOPE * (float) Math.pow(q, -SLOPE_Q_EXPONENT);
+                    float graded = base + slope * stepM(i, ch.at[p + 1], grid);
+                    float w = Math.min(ceiling, graded);
+                    if (ceiling - w > CANYON_DEPTHS * depth[k]) w = ceiling;
+                    lv = Math.max(base, w);
+                }
+                ch.lv[p] = lv;
+                level[k] = lv;
+                levelOut[i] = lv;
+                widthOut[i] = width[k];
+            }
+
+            // A river spreads a floodplain and meanders the flatter it runs
+            ch.run[0] = 0f;
             for (int p = 1; p < m; p++) {
-                run[p] = run[p - 1] + (float) Math.hypot(ci[p] - ci[p - 1], cj[p] - cj[p - 1]);
+                ch.run[p] = ch.run[p - 1] + (float) Math.hypot(ch.ci[p] - ch.ci[p - 1], ch.cj[p] - ch.cj[p - 1]);
             }
             for (int p = 0; p < m; p++) {
                 int a = Math.max(0, p - SLOPE_HALF), b = Math.min(m - 1, p + SLOPE_HALF);
-                float fall = run[b] > run[a] ? (lv[a] - lv[b]) / ((run[b] - run[a]) * RiverHydrology.CELL_SIZE_M) : 0f;
-                float flat = Math.max(0f, 1f - fall / STEEP_SLOPE);
-                fp[p] = 0.5f * wd[p] * (1f + WaterNetwork.WIDTH_VARIATION + FLOODPLAIN_WIDTHS * flat);
+                float span = (ch.run[b] - ch.run[a]) * RiverHydrology.CELL_SIZE_M;
+                float fall = span > 0f ? (ch.lv[a] - ch.lv[b]) / span : 0f;
+                ch.flat[p] = Math.max(0f, 1f - fall / STEEP_SLOPE);
+                ch.fp[p] = 0.5f * ch.wd[p] * (1f + WaterNetwork.WIDTH_VARIATION + FLOODPLAIN_WIDTHS * ch.flat[p]);
+            }
+
+            // Meanders swing between pins in whole half-waves. A pin is an end of the chain or a node where it
+            // crosses into another region; there the river runs down its valley's line at the same angle on both
+            // sides, so the regions either side draw their own rivers and still meet exactly.
+            int a = 0;
+            for (int b = 1; b < m; b++) {
+                if (b < m - 1 && regionOf(ch.at[b], grid, windowI, windowJ, regionPx)
+                        == regionOf(ch.at[b - 1], grid, windowI, windowJ, regionPx)) {
+                    continue;
+                }
+                meander(ch, a, b, a > 0, b < m - 1, windowI, windowJ, grid);
+                a = b;
+            }
+
+            // A tributary bends at its end to meet the stem wherever the stem's channel has swung, leaving its own
+            // meanders as it goes
+            float di = join >= 0 ? pi[join] - vi[join] : 0f, dj = join >= 0 ? pj[join] - vj[join] : 0f;
+            float blend = Math.max(4f, 2f * (float) Math.hypot(di, dj));
+            for (int p = 0; p < m; p++) {
+                float t = join >= 0 ? Math.max(0f, 1f - (ch.run[m - 1] - ch.run[p]) / blend) : 0f;
+                t = t * t * (3f - 2f * t);
+                ch.ci[p] += ch.y[p] * (1f - t) * ch.ni[p] + di * t;
+                ch.cj[p] += ch.y[p] * (1f - t) * ch.nj[p] + dj * t;
+                int k = ch.node[p];
+                if (k >= 0) {
+                    pi[k] = ch.ci[p];
+                    pj[k] = ch.cj[p];
+                }
             }
 
             for (int p = 0; p + 1 < m; p++) {
-                if (Math.floorDiv(windowI + at[p] / grid, regionPx) != regionI
-                        || Math.floorDiv(windowJ + at[p] % grid, regionPx) != regionJ) {
-                    continue;
-                }
+                if (regionOf(ch.at[p], grid, windowI, windowJ, regionPx) != own) continue;
                 if (count * STRIDE + STRIDE > seg.length) seg = Arrays.copyOf(seg, seg.length * 2);
                 int o = count++ * STRIDE;
                 for (int e = 0; e < 2; e++) {
                     int q = p + e, f = o + END * e;
-                    seg[f] = ci[q];
-                    seg[f + 1] = cj[q];
-                    seg[f + 2] = lv[q];
-                    seg[f + 3] = wd[q];
-                    seg[f + 4] = dp[q];
-                    seg[f + 5] = fp[q];
+                    seg[f] = ch.ci[q];
+                    seg[f + 1] = ch.cj[q];
+                    seg[f + 2] = ch.lv[q];
+                    seg[f + 3] = ch.wd[q];
+                    seg[f + 4] = ch.dp[q];
+                    seg[f + 5] = ch.fp[q];
                 }
             }
         }
         return new RiverNetwork(seg, count, regionI, regionJ, regionPx, blockM);
     }
 
-    private static int point(float[] ci, float[] cj, float[] lv, float[] wd, float[] dp, int[] at, int[] node, int m,
-                             float i, float j, float level, float width, float depth, int cell, int k) {
-        ci[m] = i;
-        cj[m] = j;
-        lv[m] = level;
-        wd[m] = width;
-        dp[m] = depth;
-        at[m] = cell;
-        node[m] = k;
-        return m + 1;
+    // The points of one chain as it is traced: where each is (its valley, then its channel), the direction across
+    // the valley there, the valley floor to either side in cells, its level, width, depth, flatness, floodplain
+    // half-width, distance down the valley and meander offset, the window cell it belongs to, and the node it is,
+    // or -1 for an end it shares with water or a larger stem
+    private static final class Chain {
+        final float[] ci, cj, tmpI, tmpJ, ni, nj, roomPos, roomNeg, lv, wd, dp, flat, fp, run, y;
+        final int[] at, node, half;
+        int m;
+
+        Chain(int cap) {
+            ci = new float[cap];
+            cj = new float[cap];
+            tmpI = new float[cap];
+            tmpJ = new float[cap];
+            ni = new float[cap];
+            nj = new float[cap];
+            roomPos = new float[cap];
+            roomNeg = new float[cap];
+            lv = new float[cap];
+            wd = new float[cap];
+            dp = new float[cap];
+            flat = new float[cap];
+            fp = new float[cap];
+            run = new float[cap];
+            y = new float[cap];
+            at = new int[cap];
+            node = new int[cap];
+            half = new int[cap];
+        }
+
+        void add(float i, float j, int cell, int k) {
+            ci[m] = i;
+            cj[m] = j;
+            at[m] = cell;
+            node[m] = k;
+            roomPos[m] = 0f;
+            roomNeg[m] = 0f;
+            y[m] = 0f;
+            m++;
+        }
+
+        // The direction across the valley at each point, along the chord through the valley either side of it over
+        // the river's width
+        void frame() {
+            for (int p = 0; p < m; p++) {
+                int half = Math.max(1, Math.round(FRAME_WIDTHS * wd[p] / RiverHydrology.CELL_SIZE_M));
+                int a = Math.max(0, p - half), b = Math.min(m - 1, p + half);
+                float ti = ci[b] - ci[a], tj = cj[b] - cj[a];
+                float len = (float) Math.hypot(ti, tj);
+                ni[p] = len > 0f ? -tj / len : 0f;
+                nj[p] = len > 0f ? ti / len : 0f;
+            }
+        }
+    }
+
+    // Offsets the points from a to b across their valley in whole half-waves of a sine, nothing at either end. At a
+    // pin the river leaves the valley's line towards the side that pin's place picks, so a stretch that ends at a pin
+    // takes the parity of half-waves that arrives there heading the same way as the stretch beyond it sets out; a
+    // wave's length scales its swing along with it, so the river leaves every pin at the same angle on either side.
+    private static void meander(Chain ch, int a, int b, boolean pinA, boolean pinB,
+                                int windowI, int windowJ, int grid) {
+        // Half-waves down the stretch at the river's own wavelength, and at each wave's varied length
+        float lane = Math.floorMod((windowI + ch.at[a] / grid) * 31 + (windowJ + ch.at[a] % grid) * 17, 1009);
+        float natural = 0f, halfWaves = 0f;
+        ch.tmpI[a] = 0f;
+        ch.tmpJ[a] = 0f;
+        for (int p = a + 1; p <= b; p++) {
+            float step = (ch.run[p] - ch.run[p - 1]) * 2f / wavelengthCells(ch.wd[p]);
+            natural += step;
+            halfWaves += step / (1f + WAVE_JITTER * WAVES.GetNoise(natural, lane));
+            ch.tmpI[p] = natural;
+            ch.tmpJ[p] = halfWaves;
+        }
+        if (halfWaves <= 0f) return;
+        int sideA = side(ch.at[a], grid, windowI, windowJ), sideB = side(ch.at[b], grid, windowI, windowJ);
+        int count = Math.max(1, Math.round(halfWaves));
+        if (pinA && pinB && (count % 2 == 0) != (sideA == sideB)) {
+            count += count == 1 || halfWaves > count ? 1 : -1;
+        }
+        int sign = pinA ? sideA : pinB ? (count % 2 == 0 ? sideB : -sideB) : sideA;
+        float fit = count / halfWaves;
+        for (int p = a; p <= b; p++) {
+            float wave = wavelengthCells(ch.wd[p]) * (1f + WAVE_JITTER * WAVES.GetNoise(ch.tmpI[p], lane)) / fit;
+            float amplitude = wave * (float) Math.tan(MEANDER_ANGLE * ch.flat[p]) / (2f * (float) Math.PI);
+            float phase = ch.tmpJ[p] * fit;
+            phase += SKEW * (float) Math.sin(2.0 * Math.PI * phase) / (2f * (float) Math.PI);
+            float y = sign * amplitude * (float) Math.sin(Math.PI * phase);
+            float halfCells = 0.5f * ch.wd[p] / RiverHydrology.CELL_SIZE_M;
+            float pos = Math.min(MAX_MEANDER_CELLS, Math.max(0f, ch.roomPos[p] - halfCells));
+            float neg = Math.min(MAX_MEANDER_CELLS, Math.max(0f, ch.roomNeg[p] - halfCells));
+            ch.y[p] = Math.max(-neg, Math.min(pos, y));
+        }
+    }
+
+    private static float wavelengthCells(float widthM) {
+        return MEANDER_WAVELENGTH_WIDTHS * widthM / RiverHydrology.CELL_SIZE_M;
+    }
+
+    // The side a river leaves a pin towards, fixed by the pin's place in the world
+    private static int side(int cell, int grid, int windowI, int windowJ) {
+        int h = (windowI + cell / grid) * 0x632BE5AB ^ (windowJ + cell % grid) * 0x9E3779B9;
+        h ^= h >>> 15;
+        h *= 0x2C1B3C6D;
+        h ^= h >>> 12;
+        return (h & 1) == 0 ? 1 : -1;
+    }
+
+    private static long regionOf(int cell, int grid, int windowI, int windowJ, int regionPx) {
+        long ri = Math.floorDiv(windowI + cell / grid, regionPx), rj = Math.floorDiv(windowJ + cell % grid, regionPx);
+        return ri << 32 | (rj & 0xFFFFFFFFL);
+    }
+
+    // Cells of valley floor from a window point towards (di, dj) before the ground rises above the floor's height
+    // over base, as far as any meander or confinement looks
+    private static float floorCells(float[] elev, int grid, float r, float c, float di, float dj, float base) {
+        int most = MAX_MEANDER_CELLS + (int) Math.ceil(0.5f * MAX_WIDTH_M * (1f + WaterNetwork.WIDTH_VARIATION)
+                / RiverHydrology.CELL_SIZE_M);
+        for (int s = 1; s <= most; s++) {
+            float g = sampleGrid(elev, grid, r + di * s, c + dj * s);
+            if (Float.isNaN(g) || g > base + FLOOR_RISE_M) return s - 1;
+        }
+        return most;
+    }
+
+    private static float sampleGrid(float[] field, int grid, float r, float c) {
+        int r0 = (int) Math.floor(r), c0 = (int) Math.floor(c);
+        if (r0 < 0 || c0 < 0 || r0 >= grid - 1 || c0 >= grid - 1) return Float.NaN;
+        float tr = r - r0, tc = c - c0;
+        int a = r0 * grid + c0;
+        return lerp(lerp(field[a], field[a + 1], tc), lerp(field[a + grid], field[a + grid + 1], tc), tr);
     }
 
     // The lake cell draining into a river's head, the one carrying the most water if several do, or -1
@@ -305,18 +522,6 @@ final class RiverNetwork {
         return RiverHydrology.CELL_SIZE_M * (diagonal ? 1.41421f : 1f);
     }
 
-    // Nodes ordered so each comes after the node it drains to
-    private static int[] byRank(int[] rank) {
-        int n = rank.length, top = 0;
-        for (int r : rank) top = Math.max(top, r + 1);
-        int[] start = new int[top + 1];
-        for (int r : rank) start[r + 1]++;
-        for (int r = 0; r < top; r++) start[r + 1] += start[r];
-        int[] out = new int[n];
-        for (int k = 0; k < n; k++) out[start[rank[k]]++] = k;
-        return out;
-    }
-
     // How many nodes lie between each node and its river's mouth
     private static int[] hopsToMouth(int[] dn) {
         int n = dn.length;
@@ -335,14 +540,14 @@ final class RiverNetwork {
         return rank;
     }
 
-    // Averages the interior points of a polyline of m points over a window that narrows towards its ends, which
-    // stay where they are
-    private static void smooth(float[] ci, float[] cj, int m, float[] tmpI, float[] tmpJ) {
+    // Averages two values along the interior points of a polyline of m points, each over its half points either side
+    // in a window that narrows towards the ends, which stay as they are
+    private static void smooth(float[] ci, float[] cj, int m, float[] tmpI, float[] tmpJ, int[] half) {
         for (int pass = 0; pass < SMOOTH_PASSES; pass++) {
             System.arraycopy(ci, 0, tmpI, 0, m);
             System.arraycopy(cj, 0, tmpJ, 0, m);
             for (int p = 1; p < m - 1; p++) {
-                int w = Math.min(SMOOTH_HALF, Math.min(p, m - 1 - p));
+                int w = Math.min(half[p], Math.min(p, m - 1 - p));
                 float si = 0f, sj = 0f;
                 for (int q = p - w; q <= p + w; q++) {
                     si += tmpI[q];

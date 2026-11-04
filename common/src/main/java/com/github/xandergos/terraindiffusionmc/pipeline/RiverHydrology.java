@@ -5,11 +5,9 @@ import com.github.xandergos.terraindiffusionmc.infinitetensor.InfiniteTensor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayDeque;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
@@ -44,31 +42,6 @@ public final class RiverHydrology {
 
     private static final float REFERENCE_RUNOFF_MM = 300f;
 
-    // A river's width and depth at its head; downstream they grow as powers of its discharge (Leopold and
-    // Maddock 1953). Width grows faster than nature's square root, since this world's basins span only a few
-    // tens of times a head's catchment and its main rivers must still grow wide enough to carry freight.
-    private static final float STREAM_WIDTH_M = 60f;
-    private static final float STREAM_DEPTH_M = 11f;
-    private static final float WIDTH_Q_EXPONENT = 0.75f;
-    private static final float DEPTH_Q_EXPONENT = 0.4f;
-
-    static final float MAX_WIDTH_M = 720f;
-    private static final float MAX_DEPTH_M = 45f;
-
-    private static final int CONFINEMENT_SCAN_CELLS = 16;
-    private static final float CONFINEMENT_RISE_M = 18f;
-
-
-
-
-
-
-
-
-
-
-
-
     private static final int[] FACET_CR = { 0, -1, -1, 0, 0, 1, 1, 0};
     private static final int[] FACET_CC = { 1, 0, 0, -1, -1, 0, 0, 1};
     private static final int[] FACET_DR = {-1, -1, -1, -1, 1, 1, 1, 1};
@@ -92,45 +65,11 @@ public final class RiverHydrology {
         return fnl;
     }
 
-    private static final int MEANDER_TANGENT_CELLS = 8;
-
-    private static final float MEANDER_CLIMB_M = 3f;
-
-    private static final float[] MEANDER_BAND_CELLS = {8f, 24f, 72f};
-    private static final FastNoiseLite[] MEANDER_BAND_I = {
-            makeMeanderNoise(0x51DE, MEANDER_BAND_CELLS[0]),
-            makeMeanderNoise(0x51DF, MEANDER_BAND_CELLS[1]),
-            makeMeanderNoise(0x51E0, MEANDER_BAND_CELLS[2])};
-    private static final FastNoiseLite[] MEANDER_BAND_J = {
-            makeMeanderNoise(0x7A2C, MEANDER_BAND_CELLS[0]),
-            makeMeanderNoise(0x7A2D, MEANDER_BAND_CELLS[1]),
-            makeMeanderNoise(0x7A2E, MEANDER_BAND_CELLS[2])};
-
-    private static final float MEANDER_AMPLITUDE_WIDTHS = 2.4f;
-    private static final float MEANDER_ASPECT = 4.4f;
-
-    private static final float MEANDER_MIN_AMPLITUDE_M = 78f;
-
-    private static final float MEANDER_SPACE_FRACTION = 0.42f;
-
-    private static FastNoiseLite makeMeanderNoise(int seed, float wavelengthCells) {
-        FastNoiseLite fnl = new FastNoiseLite(seed);
-        fnl.SetNoiseType(FastNoiseLite.NoiseType.Perlin);
-        fnl.SetFractalType(FastNoiseLite.FractalType.FBm);
-        fnl.SetFrequency(1f / wavelengthCells);
-        fnl.SetFractalOctaves(2);
-        fnl.SetFractalLacunarity(2f);
-        fnl.SetFractalGain(0.45f);
-        return fnl;
-    }
-
     private static final float LAKE_MIN_DEPTH_M = 15f;
 
     private static final int LAKE_MIN_CELLS = 150;
 
     private static final int LAKE_MAX_SPAN = MARGIN_PX;
-
-    private static final float LAKE_FLOOR_M = 0.5f;
 
     private static final int LAKE_RIM_CELLS = 3;
 
@@ -690,153 +629,18 @@ public final class RiverHydrology {
                     && r > 0 && c > 0 && r < GRID - 1 && c < GRID - 1;
             filled[i] = routing[i] + fillDepth[i];
         }
-        int[] chanIdx = channelCells(channel);
-
-        float[] perR = new float[GRID * GRID];
-        float[] perC = new float[GRID * GRID];
-        InfiniteTensor.throwIfCancelled();
-        flowTangents(elev, chanIdx, down, perR, perC);
-
-        float[] widthM = new float[GRID * GRID];
-        float[] depthM = new float[GRID * GRID];
-        InfiniteTensor.throwIfCancelled();
-        hydraulicGeometry(elev, chanIdx, acc, perR, perC, widthM, depthM);
-
-        float[] offR = new float[GRID * GRID];
-        float[] offC = new float[GRID * GRID];
-        InfiniteTensor.throwIfCancelled();
-        meanderOffsets(elev, chanIdx, widthM, perR, perC, windowI, windowJ, offR, offC);
-
         float[] level = new float[GRID * GRID];
+        float[] width = new float[GRID * GRID];
         Arrays.fill(level, Float.NaN);
+        InfiniteTensor.throwIfCancelled();
         RiverNetwork rivers = RiverNetwork.trace(regionI, regionJ, REGION_PX, windowI, windowJ, GRID, channel, down,
-                acc, filled, widthM, depthM, offR, offC, outlet, outletLevel, blockM, level);
+                acc, filled, elev, outlet, outletLevel, blockM, level, width);
 
         InfiniteTensor.throwIfCancelled();
         KarstNetwork karst = KarstHydrology.solve(regionI, regionJ, windowI, windowJ, GRID,
-                elev, acc, channel, fillDepth, level, lake, widthM, down, REGION_PX, MARGIN_PX, blockM);
+                elev, acc, channel, fillDepth, level, lake, width, down, REGION_PX, MARGIN_PX, blockM);
         InfiniteTensor.throwIfCancelled();
         return new Region(regionI, regionJ, rivers, crop(lake), crop(lakeDeep), karst);
-    }
-
-    private static float sampleGrid(float[] field, float rf, float cf) {
-        int r0 = (int) Math.floor(rf), c0 = (int) Math.floor(cf);
-        if (r0 < 0 || c0 < 0 || r0 >= GRID - 1 || c0 >= GRID - 1) {
-            return Float.NaN;
-        }
-        float tr = rf - r0, tc = cf - c0;
-        int a = r0 * GRID + c0;
-        return lerp(lerp(field[a], field[a + 1], tc),
-                    lerp(field[a + GRID], field[a + GRID + 1], tc), tr);
-    }
-
-    private static float valleyFloorM(float[] elev, float r0, float c0, float perpR, float perpC) {
-        float base = sampleGrid(elev, r0, c0);
-        if (Float.isNaN(base)) {
-            return CELL_SIZE_M;
-        }
-        int cells = 0;
-        for (int side = -1; side <= 1; side += 2) {
-            for (int s = 1; s <= CONFINEMENT_SCAN_CELLS; s++) {
-                float g = sampleGrid(elev, r0 + perpR * s * side, c0 + perpC * s * side);
-                if (Float.isNaN(g) || g > base + CONFINEMENT_RISE_M) {
-                    break;
-                }
-                cells++;
-            }
-        }
-        return Math.max(1, cells) * CELL_SIZE_M;
-    }
-
-    private static void flowTangents(float[] elev, int[] chanIdx, int[] down,
-                                     float[] perROut, float[] perCOut) {
-        for (int i : chanIdx) {
-            if (elev[i] < 0f) {
-                continue;
-            }
-            int ahead = i;
-            for (int s = 0; s < MEANDER_TANGENT_CELLS; s++) {
-                int step = successor(down, ahead);
-                if (step < 0) {
-                    break;
-                }
-                ahead = step;
-            }
-            float dr = (ahead / GRID) - (i / GRID), dc = (ahead % GRID) - (i % GRID);
-            float len = (float) Math.sqrt(dr * dr + dc * dc);
-            if (len <= 0f) {
-                continue;
-            }
-            perROut[i] = -dc / len;
-            perCOut[i] = dr / len;
-        }
-    }
-
-    private static void hydraulicGeometry(float[] elev, int[] chanIdx, float[] acc,
-                                          float[] perR, float[] perC,
-                                          float[] widthOut, float[] depthOut) {
-        for (int i : chanIdx) {
-            if (elev[i] < 0f) {
-                continue;
-            }
-            // Discharge relative to a stream head's
-            double q = acc[i] / STREAM_CELLS;
-            float w = (float) Math.min(MAX_WIDTH_M, STREAM_WIDTH_M * Math.pow(q, WIDTH_Q_EXPONENT));
-            float dep = (float) Math.min(MAX_DEPTH_M, STREAM_DEPTH_M * Math.pow(q, DEPTH_Q_EXPONENT));
-
-            // A valley narrower than the river holds it narrower and deeper
-            float held = Math.min(w, valleyFloorM(elev, i / GRID, i % GRID, perR[i], perC[i]));
-            widthOut[i] = held;
-            depthOut[i] = dep * (float) Math.sqrt(Math.min(2f, w / held));
-        }
-    }
-
-    private static void meanderOffsets(float[] elev, int[] chanIdx, float[] widthM,
-                                       float[] perR, float[] perC, int windowI, int windowJ,
-                                       float[] offROut, float[] offCOut) {
-        for (int i : chanIdx) {
-            if (elev[i] < 0f) {
-                continue;
-            }
-            float perpR = perR[i], perpC = perC[i];
-            if (perpR == 0f && perpC == 0f) {
-                continue;
-            }
-            int r = i / GRID, c = i % GRID;
-            float floorM = valleyFloorM(elev, r, c, perpR, perpC);
-
-            float ampM = MEANDER_AMPLITUDE_WIDTHS * widthM[i];
-            ampM = Math.max(ampM, MEANDER_MIN_AMPLITUDE_M);
-            ampM = Math.min(ampM, MEANDER_SPACE_FRACTION * floorM);
-            if (ampM <= 0f) {
-                continue;
-            }
-            float lamCells = MEANDER_ASPECT * ampM / CELL_SIZE_M;
-
-            float nx = windowJ + c;
-            float ny = windowI + r;
-            float lateral = 0f, weight = 0f;
-            float t = (float) (Math.log(Math.max(1f, lamCells)) / Math.log(2));
-            for (int k = 0; k < MEANDER_BAND_CELLS.length; k++) {
-                float tk = (float) (Math.log(MEANDER_BAND_CELLS[k]) / Math.log(2));
-                float wk = 1f - Math.abs(t - tk) / 1.585f;
-                if (wk <= 0f) {
-                    continue;
-                }
-                lateral += wk * (MEANDER_BAND_I[k].GetNoise(nx, ny) * perpR
-                        + MEANDER_BAND_J[k].GetNoise(nx, ny) * perpC);
-                weight += wk;
-            }
-            if (weight <= 0f) {
-                continue;
-            }
-            lateral /= weight;
-
-            float want = lateral * (ampM / CELL_SIZE_M);
-            float shift = valleyLimit(elev, r, c, perpR, perpC, want, MEANDER_CLIMB_M);
-            offROut[i] = perpR * shift;
-            offCOut[i] = perpC * shift;
-        }
     }
 
     private static float[] seaDistance(float[] elev) {
@@ -864,52 +668,6 @@ public final class RiverHydrology {
                 if (r < GRID - 1 && c > 0) d[i] = Math.min(d[i], d[i + GRID - 1] + DIAG);
             }
         return d;
-    }
-
-    private static int[] channelCells(boolean[] channel) {
-        int count = 0;
-        for (boolean b : channel) {
-            if (b) count++;
-        }
-        int[] out = new int[count];
-        for (int i = 0, k = 0; i < channel.length; i++) {
-            if (channel[i]) out[k++] = i;
-        }
-        return out;
-    }
-
-    private static int successor(int[] down, int i) {
-        int d = down[i];
-        if (d < 0 || d == i) {
-            return -1;
-        }
-        int dr = (d / GRID) - (i / GRID), dc = (d % GRID) - (i % GRID);
-        return (Math.abs(dr) <= 1 && Math.abs(dc) <= 1) ? d : -1;
-    }
-
-    private static float valleyLimit(float[] elev, int r, int c,
-                                     float perpR, float perpC, float want, float climbM) {
-        float limit = Math.abs(want);
-        if (limit <= 0f) {
-            return 0f;
-        }
-        float sign = want < 0f ? -1f : 1f;
-        float ceiling = elev[r * GRID + c] + climbM;
-        float reached = 0f;
-        int steps = (int) Math.ceil(limit);
-        for (int s = 1; s <= steps; s++) {
-            float t = Math.min(s, limit);
-            int rr = Math.round(r + perpR * t * sign);
-            int cc = Math.round(c + perpC * t * sign);
-            if (rr < 1 || cc < 1 || rr >= GRID - 1 || cc >= GRID - 1) {
-                break;
-            }
-            if (elev[rr * GRID + cc] > ceiling) {
-                break;
-            }
-            reached = t;
-        }
-        return reached * sign;
     }
 
     // How water drains a window: where each cell sends it, how much passes through, and the lake basins it
