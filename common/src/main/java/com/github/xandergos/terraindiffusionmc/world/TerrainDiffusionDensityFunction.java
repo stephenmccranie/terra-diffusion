@@ -68,9 +68,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
         int localX = Math.max(0, Math.min(data.width - 1, x - blockStartX));
         int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
 
-        int targetHeight = HeightConverter.convertToMinecraftHeight(
-                data.heightmap[localZ][localX]
-        );
+        int targetHeight = data.surfaceY[localZ * data.width + localX];
 
         double terrain = targetHeight - y;
         if (terrain <= 0.0) {
@@ -133,8 +131,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
             int localX = Math.max(0, Math.min(data.width  - 1, x - ctx.blockStartX));
             int localZ = Math.max(0, Math.min(data.height - 1, z - ctx.blockStartZ));
 
-            int targetHeight = HeightConverter
-                .convertToMinecraftHeight(data.heightmap[localZ][localX]);
+            int targetHeight = data.surfaceY[localZ * data.width + localX];
             double terrain = targetHeight - y;
             densities[i] = (!caves || terrain <= 0.0)
                     ? terrain

@@ -58,6 +58,8 @@ public final class LocalTerrainProvider {
         public final byte[][] climateH;
         public final byte[][] climateE;
         public KarstNetwork karst = KarstNetwork.EMPTY;
+        // Minecraft Y of each column's ground, row-major
+        public final short[] surfaceY;
         // Lowest surface Y of each column and the columns CAVE_SIDE blocks around it, row-major
         public final short[] sideSurface;
         // Y range, inclusive and row-major, where a column has river water within RIVER_WALL blocks
@@ -69,7 +71,7 @@ public final class LocalTerrainProvider {
 
         public HeightmapData(short[][] heightmap, short[][] biomeIds, byte[][] snowLayers,
                              short[][] waterLevel, byte[][] climateT, byte[][] climateH,
-                             byte[][] climateE, short[] sideSurface, short[] riverWallLow,
+                             byte[][] climateE, short[] surfaceY, short[] sideSurface, short[] riverWallLow,
                              short[] riverWallHigh, int width, int height) {
             this.heightmap  = heightmap;
             this.biomeIds   = biomeIds;
@@ -78,6 +80,7 @@ public final class LocalTerrainProvider {
             this.climateT   = climateT;
             this.climateH   = climateH;
             this.climateE   = climateE;
+            this.surfaceY = surfaceY;
             this.sideSurface = sideSurface;
             this.riverWallLow = riverWallLow;
             this.riverWallHigh = riverWallHigh;
@@ -448,6 +451,7 @@ public final class LocalTerrainProvider {
         float[] bed = new float[H * W];
         float[] water = new float[H * W];
         WaterNetwork.Sample sample = new WaterNetwork.Sample();
+        WaterNetwork.Reaches rivers = new WaterNetwork.Reaches();
         float toNative = coordScale == 1 ? scale : 1;
 
         for (int r = 0; r < H; r++) {
@@ -456,13 +460,10 @@ public final class LocalTerrainProvider {
                 int idx = r * W + c;
                 float nativeI = (i1 + r) / toNative;
                 float nativeJ = (j1 + c) / toNative;
-                float[] ch = RiverHydrology.sampleChannel(pipeline, nativeI, nativeJ, metersPerBlock);
+                RiverHydrology.sampleRivers(pipeline, nativeI, nativeJ, metersPerBlock, rivers);
                 float[] lk = RiverHydrology.sampleLake(pipeline, nativeI, nativeJ, metersPerBlock);
-                WaterNetwork.sample((j1 + c) * coordScale, (i1 + r) * coordScale, ground[idx], smooth[idx],
-                        ch == null ? -1f : ch[0] * scale, ch == null ? 0f : ch[1],
-                        ch == null ? 0f : ch[2], ch == null ? 0f : ch[3],
-                        lk == null ? WaterNetwork.NO_WATER : lk[0], lk == null ? 0f : lk[1],
-                        metersPerBlock, sample);
+                WaterNetwork.sample((j1 + c) * coordScale, (i1 + r) * coordScale, ground[idx], smooth[idx], rivers,
+                        lk == null ? WaterNetwork.NO_WATER : lk[0], lk == null ? 0f : lk[1], metersPerBlock, sample);
                 bed[idx] = sample.bedElevM;
                 water[idx] = sample.waterSurfaceM;
             }
@@ -502,6 +503,7 @@ public final class LocalTerrainProvider {
         byte[][] climateT = new byte[tH][tW];
         byte[][] climateH = new byte[tH][tW];
         byte[][] climateE = new byte[tH][tW];
+        short[] surfaceY = new short[tH * tW];
         short[] sideSurface = new short[tH * tW];
         short[] riverWallLow = new short[tH * tW];
         short[] riverWallHigh = new short[tH * tW];
@@ -530,6 +532,7 @@ public final class LocalTerrainProvider {
                 climateH[r][c] = packUnit((float) ((Math.log10(precip) - 2.85) / 0.55));
                 climateE[r][c] = packUnit(1f - 2f * ((hi - lo) / mpb) / RELIEF_REF);
 
+                surfaceY[t] = (short) groundY[i];
                 int side = groundY[i];
                 for (int dr = -CAVE_SIDE; dr <= CAVE_SIDE; dr += CAVE_SIDE)
                     for (int dc = -CAVE_SIDE; dc <= CAVE_SIDE; dc += CAVE_SIDE)
@@ -548,7 +551,7 @@ public final class LocalTerrainProvider {
                 riverWallHigh[t] = (short) wallHi;
             }
         return new HeightmapData(heightmap, biomeIds, snowLayers, waterLevel, climateT, climateH, climateE,
-                sideSurface, riverWallLow, riverWallHigh, tW, tH);
+                surfaceY, sideSurface, riverWallLow, riverWallHigh, tW, tH);
     }
 
     // Window, in blocks, over which local relief sets vanilla's erosion axis

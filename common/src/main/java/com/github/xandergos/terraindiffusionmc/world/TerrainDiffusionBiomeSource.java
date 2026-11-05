@@ -223,7 +223,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         int localX = Math.max(0, Math.min(data.width  - 1, blockX - blockStartX));
         int localZ = Math.max(0, Math.min(data.height - 1, blockZ - blockStartZ));
 
-        int surfaceY = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
+        int surfaceY = data.surfaceY[localZ * data.width + localX];
         Holder<Biome> cave = caveBiomeAt(data, localX, localZ, blockX, blockZ,
                 surfaceY, QuartPos.toBlock(y));
         if (cave != null) return cave;

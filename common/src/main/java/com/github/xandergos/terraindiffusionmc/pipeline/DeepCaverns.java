@@ -78,6 +78,13 @@ public final class DeepCaverns {
     private static final int CHIM_STEP = 16;
     private static final int CHIM_SAMPLES = (TOP - BOTTOM) / CHIM_STEP + 2;
 
+    // 3D noise is sampled on a lattice and interpolated between, as vanilla samples its own noise: every LATTICE
+    // blocks across, and up each lattice column every CHIM_STEP blocks for the chimneys and every LATTICE blocks
+    // for the cheese. Every threshold is still taken per block, so shafts and walls keep their edges.
+    private static final int LATTICE = 4;
+    private static final int CHEESE_LO = Math.floorDiv(BOTTOM, LATTICE) * LATTICE;
+    private static final int CHEESE_SAMPLES = -Math.floorDiv(-TOP, LATTICE) - Math.floorDiv(BOTTOM, LATTICE) + 1;
+
     private static FastNoiseLite cheese;
     private static FastNoiseLite region;
     private static FastNoiseLite floorNoise;
@@ -88,10 +95,13 @@ public final class DeepCaverns {
     private static FastNoiseLite chimB;
     private static volatile int GEN;
 
-    // Per-thread columns over a 32x32 block neighbourhood, slotted by the low bits of x and z
+    // Per-thread columns over a 32x32 block neighbourhood, slotted by the low bits of x and z, and lattice columns
+    // over 32x32 lattice steps
     private static final int COL_BITS = 5;
     private static final int COL_MASK = (1 << COL_BITS) - 1;
     private static final ThreadLocal<Col[]> COLS = ThreadLocal.withInitial(() -> new Col[1 << (2 * COL_BITS)]);
+    private static final ThreadLocal<Lattice[]> LATTICES =
+            ThreadLocal.withInitial(() -> new Lattice[1 << (2 * COL_BITS)]);
 
     static {
         setSeed(0L);
@@ -137,6 +147,59 @@ public final class DeepCaverns {
         float topY;
         final float[] ca = new float[CHIM_SAMPLES];
         final float[] cb = new float[CHIM_SAMPLES];
+        final float[] cheese = new float[CHEESE_SAMPLES];
+    }
+
+    // The 3D noises up one lattice column
+    private static final class Lattice {
+        int gen = -1;
+        int x = Integer.MIN_VALUE;
+        int z = Integer.MIN_VALUE;
+        final float[] ca = new float[CHIM_SAMPLES];
+        final float[] cb = new float[CHIM_SAMPLES];
+        final float[] cheese = new float[CHEESE_SAMPLES];
+    }
+
+    private static Lattice lattice(int x, int z) {
+        Lattice[] lattices = LATTICES.get();
+        int slot = ((Math.floorDiv(z, LATTICE) & COL_MASK) << COL_BITS) | (Math.floorDiv(x, LATTICE) & COL_MASK);
+        Lattice l = lattices[slot];
+        if (l == null) {
+            l = new Lattice();
+            lattices[slot] = l;
+        }
+        if (l.x == x && l.z == z && l.gen == GEN) return l;
+        l.gen = GEN;
+        l.x = x;
+        l.z = z;
+        for (int i = 0; i < CHIM_SAMPLES; i++) {
+            float sy = (BOTTOM + i * (float) CHIM_STEP) * CHIM_YSQUASH;
+            l.ca[i] = chimA.GetNoise(x, sy, z);
+            l.cb[i] = chimB.GetNoise(x, sy, z);
+        }
+        for (int i = 0; i < CHEESE_SAMPLES; i++) {
+            l.cheese[i] = cheese.GetNoise(x, (CHEESE_LO + i * LATTICE) * CHEESE_YSQUASH, z);
+        }
+        return l;
+    }
+
+    // Bilinear blend of four lattice columns' samples: a at the low corner, b across x, c across z, d across both
+    private static void blend(float[] out, float[] a, float[] b, float[] c, float[] d, float tx, float tz) {
+        for (int i = 0; i < out.length; i++) {
+            float lo = a[i] + (b[i] - a[i]) * tx;
+            float hi = c[i] + (d[i] - c[i]) * tx;
+            out[i] = lo + (hi - lo) * tz;
+        }
+    }
+
+    // Samples taken every step blocks of height from y0, interpolated at y
+    private static float alongY(float[] s, float y, int y0, int step) {
+        float t = (y - y0) / step;
+        int i = (int) Math.floor(t);
+        if (i < 0) i = 0;
+        if (i >= s.length - 1) i = s.length - 2;
+        float f = t - i;
+        return s[i] + (s[i + 1] - s[i]) * f;
     }
 
     private static Col column(int x, int z) {
@@ -172,22 +235,19 @@ public final class DeepCaverns {
             c.lake[b] = nominal + LAKE_RISE;
         }
 
-        for (int i = 0; i < CHIM_SAMPLES; i++) {
-            float sy = (BOTTOM + i * (float) CHIM_STEP) * CHIM_YSQUASH;
-            c.ca[i] = chimA.GetNoise(fx, sy, fz);
-            c.cb[i] = chimB.GetNoise(fx, sy, fz);
-        }
+        int x0 = Math.floorDiv(x, LATTICE) * LATTICE, z0 = Math.floorDiv(z, LATTICE) * LATTICE;
+        float tx = (x - x0) / (float) LATTICE, tz = (z - z0) / (float) LATTICE;
+        Lattice a = lattice(x0, z0), b = lattice(x0 + LATTICE, z0);
+        Lattice d = lattice(x0, z0 + LATTICE), e = lattice(x0 + LATTICE, z0 + LATTICE);
+        blend(c.ca, a.ca, b.ca, d.ca, e.ca, tx, tz);
+        blend(c.cb, a.cb, b.cb, d.cb, e.cb, tx, tz);
+        blend(c.cheese, a.cheese, b.cheese, d.cheese, e.cheese, tx, tz);
         return c;
     }
 
     private static float chimneyAt(Col c, float y) {
-        float t = (y - BOTTOM) / CHIM_STEP;
-        int i = (int) Math.floor(t);
-        if (i < 0) i = 0;
-        if (i >= CHIM_SAMPLES - 1) i = CHIM_SAMPLES - 2;
-        float f = t - i;
-        float a = c.ca[i] + (c.ca[i + 1] - c.ca[i]) * f;
-        float b2 = c.cb[i] + (c.cb[i + 1] - c.cb[i]) * f;
+        float a = alongY(c.ca, y, BOTTOM, CHIM_STEP);
+        float b2 = alongY(c.cb, y, BOTTOM, CHIM_STEP);
         float o = CHIM_THICK - Math.abs(a);
         float p = CHIM_THICK - Math.abs(b2);
         return (o < p ? o : p) * CHIM_K;
@@ -223,7 +283,7 @@ public final class DeepCaverns {
         }
 
         if (band >= 0) {
-            float n3 = cheese.GetNoise(x, y * CHEESE_YSQUASH, z);
+            float n3 = alongY(c.cheese, y, CHEESE_LO, LATTICE);
             float o = c.lat[band] + c.bias * LATERAL_K + n3 * WALL_NOISE;
             float ceil = c.ceil[band] - y + n3 * CEIL_NOISE;
             if (ceil < o) o = ceil;
