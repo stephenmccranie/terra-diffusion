@@ -145,7 +145,7 @@ public final class TerrainWater {
         }
         int localX = Math.max(0, Math.min(data.width - 1, x - tileStart(x)));
         int localZ = Math.max(0, Math.min(data.height - 1, z - tileStart(z)));
-        return HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
+        return data.surfaceY[localZ * data.width + localX];
     }
 
     public static KarstNetwork karstNetwork(int x, int z) {

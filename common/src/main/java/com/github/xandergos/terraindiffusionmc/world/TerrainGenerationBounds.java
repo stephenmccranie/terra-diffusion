@@ -35,7 +35,7 @@ public final class TerrainGenerationBounds {
                     || data.waterLevel[z] == null || data.waterLevel[z].length < x0 + 16))
                 return Long.MAX_VALUE;
             for (int x = x0; x < x0 + 16; x++) {
-                int ground = HeightConverter.convertToMinecraftHeight(data.heightmap[z][x], scale);
+                int ground = data.surfaceY[z * data.width + x];
                 // Avoid the density function's integer-subtraction overflow for exotic scales/models.
                 if (ground < DimensionType.MIN_Y || ground > DimensionType.MAX_Y) return Long.MAX_VALUE;
                 highest = Math.max(highest, ground);
