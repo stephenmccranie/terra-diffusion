@@ -5,10 +5,18 @@ import com.github.xandergos.terraindiffusionmc.pipeline.DeepCaverns;
 import com.github.xandergos.terraindiffusionmc.pipeline.KarstNetwork;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.levelgen.Aquifer;
+import net.minecraft.world.level.levelgen.Heightmap;
+import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.level.material.Fluids;
 
 public final class TerrainWater {
 
@@ -303,6 +311,44 @@ public final class TerrainWater {
             }
             return stream;
         };
+    }
+
+    /**
+     * Water is filled without fluid updates, so where a river's surface steps down a block or falls, its top water stood
+     * still beside open air, and a boat paddling upstream sank into it. Whenever a chunk starts ticking, top water
+     * standing beside open air above lower water spills over, as it would after any block update: a step becomes a
+     * short rapid of flowing water a boat can climb, and a fall becomes a waterfall. It reads only placed blocks, so it
+     * mends chunks generated before it, and once spilled a chunk has nothing left to do.
+     */
+    public static void spillStillWater(LevelChunk chunk) {
+        Level level = chunk.getLevel();
+        BlockPos.MutableBlockPos top = new BlockPos.MutableBlockPos();
+        BlockPos.MutableBlockPos side = new BlockPos.MutableBlockPos();
+        for (int lx = 0; lx < 16; lx++) {
+            for (int lz = 0; lz < 16; lz++) {
+                top.set(chunk.getPos().getBlockX(lx), chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, lx, lz),
+                        chunk.getPos().getBlockZ(lz));
+                FluidState water = chunk.getFluidState(top);
+                if (!water.is(Fluids.WATER)) continue;
+                for (Direction d : Direction.Plane.HORIZONTAL) {
+                    // A ticking chunk's neighbours are loaded, so looking one block across its edge loads nothing
+                    side.setWithOffset(top, d);
+                    if (level.getBlockState(side).isAir() && waterBelow(level, side)) {
+                        water.tick(level, top);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Whether the first block under the open air at pos holds water
+    private static boolean waterBelow(Level level, BlockPos.MutableBlockPos pos) {
+        while (pos.getY() > level.getMinBuildHeight()) {
+            BlockState below = level.getBlockState(pos.move(Direction.DOWN));
+            if (!below.isAir()) return below.getFluidState().is(FluidTags.WATER);
+        }
+        return false;
     }
 
     private static final class PickerColumns {

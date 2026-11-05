@@ -10,6 +10,7 @@
     "BiomeManagerJitterMixin",
     "ChunkGeneratorStructureStateMixin",
     "HolderReferenceAccessor",
+    "LevelChunkSpillMixin",
     "MinecraftServerMixin",
     "NoiseBasedChunkGeneratorAccessor",
     "NoiseBasedChunkGeneratorBeardifierMixin",
