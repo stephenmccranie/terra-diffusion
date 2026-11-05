@@ -3,17 +3,6 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 // Port of terrain_diffusion/data/laplacian_encoder.py
 public final class LaplacianUtils {
 
-    // laplacian_decode: upsample lowres to residual size (bilinear) and add residual
-    public static float[][] laplacianDecode(float[][] residual, float[][] lowres) {
-        int H = residual.length, W = residual[0].length;
-        float[][] lowresUp = bilinearResize(lowres, H, W);
-        float[][] result = new float[H][W];
-        for (int r = 0; r < H; r++)
-            for (int c = 0; c < W; c++)
-                result[r][c] = residual[r][c] + lowresUp[r][c];
-        return result;
-    }
-
     // laplacian_denoise(residual, lowres, sigma) with extrapolate=True: 1
     public static float[][] laplacianDenoise(float[][] residual, float[][] lowres, float sigma) {
         int H = residual.length, W = residual[0].length;

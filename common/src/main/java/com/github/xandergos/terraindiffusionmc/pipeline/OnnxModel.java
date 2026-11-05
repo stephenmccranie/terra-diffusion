@@ -31,16 +31,17 @@ public final class OnnxModel implements AutoCloseable {
     private static final AtomicBoolean dmlWarnLoggedOnce = new AtomicBoolean(false);
     private static final AtomicBoolean noGpuWarnLoggedOnce = new AtomicBoolean(false);
 
-    // GPU slot: when offload_models=true, only one session is alive at a time
+    // GPU slot: when offload_models=true, only one GPU session is alive at a time
     private static final Object GPU_SLOT_LOCK = new Object();
     private static OnnxModel gpuSlotHolder = null;
     private static OrtSession activeGpuSession = null;
 
     private final OrtEnvironment env;
+    // Kept only to create the model's GPU session again each time it takes the GPU slot
     private final byte[] optimizedModelBytes;
     private final String name;
-    private OrtSession cpuSession;    // non-null in CPU-only mode
-    private OrtSession gpuSession;    // non-null when offload_models=false
+    // The model's own session, unless it runs on a GPU with offload_models=true and shares the GPU slot
+    private OrtSession session;
 
     private static final class OptimizedModelLoadResult {
         private final byte[] modelBytes;
@@ -77,7 +78,7 @@ public final class OnnxModel implements AutoCloseable {
                 initializeModelSession(rebuiltOptimizedModelLoadResult.modelBytes, start);
                 loadedModelBytes = rebuiltOptimizedModelLoadResult.modelBytes;
             }
-            this.optimizedModelBytes = loadedModelBytes;
+            this.optimizedModelBytes = session == null ? loadedModelBytes : null;
         } catch (Exception e) {
             throw new RuntimeException("Failed to load ONNX model: " + modelFilePath, e);
         }
@@ -133,47 +134,33 @@ public final class OnnxModel implements AutoCloseable {
         }
     }
 
-    // Loads model sessions for the active inference device configuration
+    // Loads the model's session for the active inference device configuration. Offloading only saves VRAM,
+    // so a model that runs on the CPU keeps its session: rebuilding the base model's costs as long as a run.
     private void initializeModelSession(byte[] modelBytes, long startMillis) throws OrtException {
-        if ("cpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
-            OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
-            sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-            this.cpuSession = env.createSession(modelBytes, sessionOptions);
-            this.gpuSession = null;
+        OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
+        sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+        boolean gpu = !"cpu".equals(TerrainDiffusionConfig.inferenceDevice()) && addGpuProvider(sessionOptions);
+        if (!gpu) {
             setResolvedProviderOnce("CPU");
-            LOG.info("ONNX model '{}' loaded on CPU ({} KB) in {} ms",
+        } else if (TerrainDiffusionConfig.offloadModels()) {
+            sessionOptions.close();
+            LOG.info("ONNX model '{}' bytes cached in CPU RAM ({} KB) in {} ms",
                     name, modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
             return;
+        } else if ("CoreML".equals(resolvedInferenceProvider)) {
+            throw new OrtException(
+                    "inference.offload_models=false is not supported with CoreML. " +
+                    "Set inference.offload_models=true in terrain-diffusion-mc.properties.");
         }
-        if (!TerrainDiffusionConfig.offloadModels()) {
-            OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
-            sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
-            addGpuProvider(sessionOptions);
-            if ("CoreML".equals(resolvedInferenceProvider)) {
-                throw new OrtException(
-                        "inference.offload_models=false is not supported with CoreML. " +
-                        "Set inference.offload_models=true in terrain-diffusion-mc.properties.");
-            }
-            this.gpuSession = env.createSession(modelBytes, sessionOptions);
-            this.cpuSession = null;
-            LOG.info("ONNX model '{}' loaded on GPU ({} KB) in {} ms",
-                    name, modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
-            return;
-        }
-        this.cpuSession = null;
-        this.gpuSession = null;
-        LOG.info("ONNX model '{}' bytes cached in CPU RAM ({} KB) in {} ms",
-                name, modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
+        this.session = env.createSession(modelBytes, sessionOptions);
+        LOG.info("ONNX model '{}' loaded on {} ({} KB) in {} ms", name, gpu ? "GPU" : "CPU",
+                modelBytes.length / 1024, System.currentTimeMillis() - startMillis);
     }
 
     private void closeLoadedSessions() {
-        if (cpuSession != null) {
-            try { cpuSession.close(); } catch (OrtException ignored) {}
-            cpuSession = null;
-        }
-        if (gpuSession != null) {
-            try { gpuSession.close(); } catch (OrtException ignored) {}
-            gpuSession = null;
+        if (session != null) {
+            try { session.close(); } catch (OrtException ignored) {}
+            session = null;
         }
     }
 
@@ -219,11 +206,8 @@ public final class OnnxModel implements AutoCloseable {
 
     // Run the model with a flat float array for each named input
     public float[] run(Object[][] inputs) {
-        if (cpuSession != null) {
-            return runWithSession(cpuSession, inputs);
-        }
-        if (gpuSession != null) {
-            return runWithSession(gpuSession, inputs);
+        if (session != null) {
+            return runWithSession(session, inputs);
         }
         synchronized (GPU_SLOT_LOCK) {
             claimGpuSlot();
@@ -300,7 +284,8 @@ public final class OnnxModel implements AutoCloseable {
                 + " after " + GPU_SESSION_ATTEMPTS + " attempts", lastFailure);
     }
 
-    private void addGpuProvider(OrtSession.SessionOptions opts) throws OrtException {
+    // Adds the first GPU provider that loads and returns whether one did
+    private boolean addGpuProvider(OrtSession.SessionOptions opts) throws OrtException {
         boolean gpuRequired = "gpu".equals(TerrainDiffusionConfig.inferenceDevice());
         boolean added = false;
 
@@ -364,6 +349,7 @@ public final class OnnxModel implements AutoCloseable {
                 LOG.warn("No GPU provider loaded. Check drivers and that the mod jar is the GPU build.");
             }
         }
+        return added;
     }
 
     private static float[] runWithSession(OrtSession session, Object[][] inputs) {
@@ -397,13 +383,6 @@ public final class OnnxModel implements AutoCloseable {
                 gpuSlotHolder = null;
             }
         }
-        if (cpuSession != null) {
-            try { cpuSession.close(); } catch (OrtException ignored) {}
-            cpuSession = null;
-        }
-        if (gpuSession != null) {
-            try { gpuSession.close(); } catch (OrtException ignored) {}
-            gpuSession = null;
-        }
+        closeLoadedSessions();
     }
 }

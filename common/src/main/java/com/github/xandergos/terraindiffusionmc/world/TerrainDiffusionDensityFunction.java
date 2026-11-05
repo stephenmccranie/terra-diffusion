@@ -26,69 +26,9 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
     private static final int SEA_FLOOR_ROOF =
             Integer.parseInt(System.getProperty("terradiff.seaFloorRoof", "8"));
 
-    private static final int CAVE_SIDE =
-            Integer.parseInt(System.getProperty("terradiff.caveSide", "6"));
-
-    private static final int RIVER_WALL =
-            Integer.parseInt(System.getProperty("terradiff.riverWall", "3"));
-
     private static boolean nearRiverWater(HeightmapData data, int localX, int localZ, int y) {
-        if (RIVER_WALL <= 0 || data.waterLevel == null) {
-            return false;
-        }
-        for (int dz = -RIVER_WALL; dz <= RIVER_WALL; dz++) {
-            int lz = localZ + dz;
-            if (lz < 0 || lz >= data.height) continue;
-            for (int dx = -RIVER_WALL; dx <= RIVER_WALL; dx++) {
-                int lx = localX + dx;
-                if (lx < 0 || lx >= data.width) continue;
-                short w = data.waterLevel[lz][lx];
-                if (w == HeightmapData.NO_WATER) continue;
-                int surf = HeightConverter.convertToMinecraftHeight(w);
-                if (y > surf + 1) continue;
-                int bed = HeightConverter.convertToMinecraftHeight(data.heightmap[lz][lx]);
-                if (y >= bed - RIVER_WALL) return true;
-            }
-        }
-        return false;
-    }
-
-    private static int nearestSurface(HeightmapData data, int localX, int localZ, int here) {
-        if (CAVE_SIDE <= 0) {
-            return here;
-        }
-        int lowest = here;
-        for (int k = 0; k < 8; k++) {
-            int dx = (k == 0 || k == 4 || k == 5) ? CAVE_SIDE
-                    : (k == 1 || k == 6 || k == 7) ? -CAVE_SIDE : 0;
-            int dz = (k == 2 || k == 4 || k == 6) ? CAVE_SIDE
-                    : (k == 3 || k == 5 || k == 7) ? -CAVE_SIDE : 0;
-            int lx = localX + dx;
-            int lz = localZ + dz;
-            if (lx < 0) lx = 0; else if (lx >= data.width) lx = data.width - 1;
-            if (lz < 0) lz = 0; else if (lz >= data.height) lz = data.height - 1;
-            int h = HeightConverter.convertToMinecraftHeight(data.heightmap[lz][lx]);
-            if (h < lowest) lowest = h;
-        }
-        return lowest;
-    }
-
-    // nearestSurface for every column of a tile, computed once per tile
-    private static short[] sideSurface(HeightmapData data) {
-        short[] side = data.sideSurface;
-        if (side != null) {
-            return side;
-        }
-        int w = data.width, h = data.height;
-        side = new short[w * h];
-        for (int lz = 0; lz < h; lz++) {
-            for (int lx = 0; lx < w; lx++) {
-                int here = HeightConverter.convertToMinecraftHeight(data.heightmap[lz][lx]);
-                side[lz * w + lx] = (short) nearestSurface(data, lx, lz, here);
-            }
-        }
-        data.sideSurface = side;
-        return side;
+        int i = localZ * data.width + localX;
+        return y >= data.riverWallLow[i] && y <= data.riverWallHigh[i];
     }
 
     public static final TerrainDiffusionDensityFunction INSTANCE =
@@ -137,7 +77,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
             return terrain;
         }
         return caves ? carve(data, x, y, z, terrain, targetHeight,
-                sideSurface(data)[localZ * data.width + localX] - y, localX, localZ) : terrain;
+                data.sideSurface[localZ * data.width + localX] - y, localX, localZ) : terrain;
     }
 
     private static final class FillContext {
@@ -199,7 +139,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
             densities[i] = (!caves || terrain <= 0.0)
                     ? terrain
                     : carve(data, x, y, z, terrain, targetHeight,
-                            sideSurface(data)[localZ * data.width + localX] - y, localX, localZ);
+                            data.sideSurface[localZ * data.width + localX] - y, localX, localZ);
         }
     }
 
