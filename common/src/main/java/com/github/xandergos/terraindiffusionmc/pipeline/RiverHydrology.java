@@ -119,7 +119,7 @@ public final class RiverHydrology {
             used.clear();
         }
 
-        // When off, a seam blends only with a neighbouring region that is already built
+        // When off, a column near a region edge reads rivers only from a neighbouring region that is already built
         public void buildSeamNeighbours(boolean on) {
             seamNeighbours = on;
         }
@@ -137,7 +137,7 @@ public final class RiverHydrology {
     }
 
     // Queues every neighbour of every region within a quarter region of the native rectangle that nobody has
-    // asked for yet. A rectangle reads the regions it overlaps and, within a seam blend of an edge (which
+    // asked for yet. A rectangle reads the regions it overlaps and, within a river's reach of an edge (which
     // also covers a tile's halo), the region across it; reading a region's lakes checks them against that
     // region's neighbours, which are built on the spot. Looking a quarter region out queues those before
     // generation reaches the edge, while it is still crossing tiles that need no inference. A first build takes minutes on CPU inference against under a minute per 1,024-block
