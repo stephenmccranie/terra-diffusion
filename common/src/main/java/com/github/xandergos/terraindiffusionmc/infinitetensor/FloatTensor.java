@@ -41,32 +41,28 @@ public class FloatTensor {
         return (long) data.length * Float.BYTES;
     }
 
-    // Add values from src into this tensor at a sub-region
+    // Add values from src into this tensor at a sub-region, one contiguous run along the last axis at a time
     public void addFrom(FloatTensor src, int[][] dstRegion, int[][] srcRegion) {
         int n = shape.length;
         int[] count = new int[n];
-        int total = 1;
+        int rows = 1;
         for (int d = 0; d < n; d++) {
             count[d] = dstRegion[d][1] - dstRegion[d][0];
-            total *= count[d];
+            if (d < n - 1) rows *= count[d];
         }
-        if (total == 0) return;
+        int run = count[n - 1];
+        if (rows == 0 || run == 0) return;
 
-        // Compute strides for iterating over the count-shaped region
-        int[] iterStrides = new int[n];
-        iterStrides[n - 1] = 1;
-        for (int d = n - 2; d >= 0; d--) {
-            iterStrides[d] = iterStrides[d + 1] * count[d + 1];
-        }
-
-        for (int flat = 0; flat < total; flat++) {
-            int dstFlat = 0, srcFlat = 0;
-            for (int d = 0; d < n; d++) {
-                int idx = (flat / iterStrides[d]) % count[d];
-                dstFlat += (dstRegion[d][0] + idx) * strides[d];
-                srcFlat += (srcRegion[d][0] + idx) * src.strides[d];
+        // Position of the current run in the region's leading axes, counted like an odometer
+        int[] at = new int[n - 1];
+        for (int row = 0; row < rows; row++) {
+            int dst = dstRegion[n - 1][0], from = srcRegion[n - 1][0];
+            for (int d = 0; d < n - 1; d++) {
+                dst += (dstRegion[d][0] + at[d]) * strides[d];
+                from += (srcRegion[d][0] + at[d]) * src.strides[d];
             }
-            data[dstFlat] += src.data[srcFlat];
+            for (int k = 0; k < run; k++) data[dst + k] += src.data[from + k];
+            for (int d = n - 2; d >= 0 && ++at[d] == count[d]; d--) at[d] = 0;
         }
     }
 
