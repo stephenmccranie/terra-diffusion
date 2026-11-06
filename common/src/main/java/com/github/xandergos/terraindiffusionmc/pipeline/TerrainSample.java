@@ -29,6 +29,8 @@ public final class TerrainSample {
 
     public float bareThreshold;
 
+    public boolean aboveTreeLine;
+
     public boolean treesNone, treesSparse, treesForest, treesDense, treesRainforest;
 
     public boolean barren;

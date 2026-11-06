@@ -477,7 +477,7 @@ public final class WorldPipeline implements AutoCloseable {
     public float[][] get(int i1, int j1, int i2, int j2, boolean withClimate) {
         float[][] heights = heights(i1, j1, i2, j2);
         // Temperature follows the model's own heights, so raised mountains keep its snow lines and climate
-        float[] climate = withClimate ? computeClimate(i1, j1, i2, j2, heights[1], i2 - i1, j2 - j1) : null;
+        float[] climate = withClimate ? computeClimate(i1, j1, i2, j2, heights, i2 - i1, j2 - j1) : null;
         return new float[][]{heights[0], climate};
     }
 
@@ -543,8 +543,11 @@ public final class WorldPipeline implements AutoCloseable {
         return new float[][]{elev, base};
     }
 
+    // Channels: temperature at the model's height, its seasonal spread, precipitation, its variation, the
+    // lapse rate, the regional temperature, and how far the world raised the ground above the model's height
     private float[] computeClimate(int i1, int j1, int i2, int j2,
-                                    float[] elevFlat, int H, int W) {
+                                    float[][] heights, int H, int W) {
+        float[] elevFlat = heights[1];
         int lc = LATENT_COMPRESSION;
         int S = 32 * lc;  // native pixels per coarse pixel in stride sense
 
@@ -590,7 +593,7 @@ public final class WorldPipeline implements AutoCloseable {
         }
 
         // Bilinear upsample to native resolution
-        float[] climate = new float[6 * H * W];
+        float[] climate = new float[7 * H * W];
         for (int r = 0; r < H; r++) {
             // fractional index into lbt/centralCoarse arrays (matches Python's u = (ii+0.5)/S - ci1 + 0.5)
             float gridY    = (i1 + r + 0.5f) / S - ci1 + 0.5f;
@@ -609,6 +612,7 @@ public final class WorldPipeline implements AutoCloseable {
                 climate[3 * H * W + r * W + c] = bilinearSample2D(centralCoarse[5], cenH, cenW, cenGridY, cenGridX);
                 climate[4 * H * W + r * W + c] = beta;
                 climate[5 * H * W + r * W + c] = bilinearSample2D(centralCoarse[2], cenH, cenW, cenGridY, cenGridX);
+                climate[6 * H * W + r * W + c] = heights[0][r * W + c] - heights[1][r * W + c];
             }
         }
         return climate;
