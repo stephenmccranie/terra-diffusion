@@ -543,11 +543,11 @@ public final class WorldPipeline implements AutoCloseable {
         return new float[][]{elev, base};
     }
 
-    // Channels: temperature at the model's height, its seasonal spread, precipitation, its variation, the
-    // lapse rate, the regional temperature, and how far the world raised the ground above the model's height
-    private float[] computeClimate(int i1, int j1, int i2, int j2,
-                                    float[][] heights, int H, int W) {
-        float[] elevFlat = heights[1];
+    // The coarse climate around a box of native pixels: S native pixels per coarse pixel, the box's first
+    // coarse pixel, the windowed lapse regression {sea-level temperature, lapse} and the six central channels
+    private record CoarseClimate(int S, int ci1, int cj1, float[][][] lbt, float[][][] central) {}
+
+    private CoarseClimate coarseClimate(int i1, int j1, int i2, int j2, int H, int W) {
         int lc = LATENT_COMPRESSION;
         int S = 32 * lc;  // native pixels per coarse pixel in stride sense
 
@@ -591,6 +591,35 @@ public final class WorldPipeline implements AutoCloseable {
             float[][] full = to2D(coarseMap[ch], cH, cW);
             centralCoarse[ch] = cropArray(full, cenPad, cenPad, cenH, cenW);
         }
+        return new CoarseClimate(S, ci1, cj1, lbt, centralCoarse);
+    }
+
+    // Air temperature at sea level, the regional baseline the climate lapses from, for a box of native pixels
+    public float[] seaLevelTemperature(int i1, int j1, int i2, int j2) {
+        int H = i2 - i1, W = j2 - j1;
+        CoarseClimate cc = coarseClimate(i1, j1, i2, j2, H, W);
+        float[][] base = cc.lbt()[0];
+        float[] out = new float[H * W];
+        for (int r = 0; r < H; r++) {
+            float gridY = (i1 + r + 0.5f) / cc.S() - cc.ci1() + 0.5f;
+            for (int c = 0; c < W; c++) {
+                float gridX = (j1 + c + 0.5f) / cc.S() - cc.cj1() + 0.5f;
+                out[r * W + c] = bilinearSample2D(base, base.length, base[0].length, gridY, gridX);
+            }
+        }
+        return out;
+    }
+
+    // Channels: temperature at the model's height, its seasonal spread, precipitation, its variation, the
+    // lapse rate, the regional temperature, and how far the world raised the ground above the model's height
+    private float[] computeClimate(int i1, int j1, int i2, int j2,
+                                    float[][] heights, int H, int W) {
+        float[] elevFlat = heights[1];
+        CoarseClimate cc = coarseClimate(i1, j1, i2, j2, H, W);
+        int S = cc.S(), ci1 = cc.ci1(), cj1 = cc.cj1();
+        float[][][] lbt = cc.lbt(), centralCoarse = cc.central();
+        int lH = lbt[0].length, lW = lbt[0][0].length;
+        int cenH = centralCoarse[0].length, cenW = centralCoarse[0][0].length;
 
         // Bilinear upsample to native resolution
         float[] climate = new float[7 * H * W];
