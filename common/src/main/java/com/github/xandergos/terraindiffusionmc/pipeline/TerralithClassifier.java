@@ -23,7 +23,6 @@ public final class TerralithClassifier {
     private static final float WARM_CAP_C = 14f;
 
     private static final float SNOW_LINE_C = -3f;
-    private static final float TREE_LINE_C = -6f;
     private static final float ICE_C = -13f;
     private static final float GEM_PEAK_C = -3f;
     private static final float CALDERA_C = 12f;
@@ -134,7 +133,8 @@ public final class TerralithClassifier {
 
         int zoneHeat = classOf(s.tReg, HEAT_EDGES_C);
         int wet = classOf(s.moist, WET_EDGES);
-        boolean snowy = s.frost < SNOW_LINE_C;
+        // Forest shows its winter snow; treeless ground above the tree line shows only snow the summer leaves
+        boolean snowy = s.aboveTreeLine ? s.permanentSnow : s.frost < SNOW_LINE_C;
 
         if (!snowy && scarletMountain(s, wet)) {
             return SCARLET_MOUNTAINS;
@@ -144,6 +144,9 @@ public final class TerralithClassifier {
         }
         if (snowy) {
             return snowy(s, zoneHeat, wet);
+        }
+        if (s.aboveTreeLine) {
+            return s.slope >= STEEP ? ROCKY_MOUNTAINS : STEPPE;
         }
 
         int heat = heatOf(s);
@@ -240,16 +243,19 @@ public final class TerralithClassifier {
         float local = v01(VARIANT_LOCAL, s);
         if (snowy) {
             if (coastal) {
-                return s.temp < BiomeClassifier.FROZEN_SURFACE_C
+                return s.airC < BiomeClassifier.FROZEN_SURFACE_C
                         ? FROZEN_CLIFFS
                         : BiomeClassifier.SNOWY_SLOPES;
             }
             if (!BiomeClassifier.frozenSurface(s)) return BiomeClassifier.SNOWY_SLOPES;
-            if (s.temp < ICE_C && local > GLACIER_THRESHOLD) return GLACIAL_CHASM;
+            if (s.airC < ICE_C && local > GLACIER_THRESHOLD) return GLACIAL_CHASM;
             return local < Q_BOT_25 ? FROZEN_CLIFFS : BiomeClassifier.FROZEN_PEAKS;
         }
         if (heat >= TEMPERATE && volcanic(s)) {
             return s.relElev >= HIGH_M ? VOLCANIC_PEAKS : BASALT_CLIFFS;
+        }
+        if (s.aboveTreeLine) {
+            return local > Q_MEDIAN ? ROCKY_MOUNTAINS : YOSEMITE_CLIFFS;
         }
         if (heat >= WARM && wet <= SEMIARID) {
             if (wet == HYPERARID) return DESERT_SPIRES;
@@ -271,43 +277,38 @@ public final class TerralithClassifier {
         boolean steep = s.slope >= STEEP;
         boolean high = s.relElev >= HIGH_M;
         boolean hill = s.relElev >= UPPER_M || s.slope >= GENTLE;
-        boolean trees = s.temp > TREE_LINE_C;
         boolean lowFlat = s.slope < GENTLE && (s.altM < SNOW_FLAT_M || s.relElev < BASIN_M);
         boolean marsh = wetland(s);
         float broad = v01(VARIANT_BROAD, s);
 
-        if (s.relElev >= UPPER_M && s.temp < GEM_PEAK_C && massif(EMERALD, s) > EMERALD_THRESHOLD) {
+        if (s.relElev >= UPPER_M && s.airC < GEM_PEAK_C && massif(EMERALD, s) > EMERALD_THRESHOLD) {
             return EMERALD_PEAKS;
         }
 
-        if (s.temp < ICE_C && (high || steep) && BiomeClassifier.frozenSurface(s)
+        if (s.airC < ICE_C && (high || steep) && BiomeClassifier.frozenSurface(s)
                 && v01(VARIANT_LOCAL, s) > GLACIER_THRESHOLD) {
             return GLACIAL_CHASM;
         }
 
         if (steep) {
             if (BiomeClassifier.frozenSurface(s)) return BiomeClassifier.FROZEN_PEAKS;
-            if (wet >= HUMID && trees) return BiomeClassifier.GROVE;
+            if (wet >= HUMID && !s.aboveTreeLine) return BiomeClassifier.GROVE;
             return BiomeClassifier.SNOWY_SLOPES;
         }
 
         if (wet <= ARID) {
-            if (hill) {
-                if (zoneHeat >= BOREAL) return SNOWY_BADLANDS;
-                return v01(VARIANT_LOCAL, s) > Q_MEDIAN ? ROCKY_SHRUBLAND : COLD_SHRUBLAND;
-            }
-            if (wet == HYPERARID) return GRAVEL_DESERT;
-            return zoneHeat >= BOREAL ? SNOWY_BADLANDS : COLD_SHRUBLAND;
+            if (zoneHeat >= BOREAL && (hill || wet == ARID)) return SNOWY_BADLANDS;
+            if (s.aboveTreeLine || (!hill && wet == HYPERARID)) return GRAVEL_DESERT;
+            return hill && v01(VARIANT_LOCAL, s) > Q_MEDIAN ? ROCKY_SHRUBLAND : COLD_SHRUBLAND;
         }
 
-        if (high && !trees) {
-            return BiomeClassifier.SNOWY_SLOPES;
-        }
-
-        if (!trees || wet == SEMIARID) {
+        if (s.aboveTreeLine) {
             if (hill) return BiomeClassifier.SNOWY_SLOPES;
-            if (wet == WET && marsh) return ICE_MARSH;
-            if (wet == SEMIARID && !trees) return GRAVEL_DESERT;
+            return wet == SEMIARID ? GRAVEL_DESERT : BiomeClassifier.SNOWY_PLAINS;
+        }
+
+        if (wet == SEMIARID) {
+            if (hill) return BiomeClassifier.SNOWY_SLOPES;
             return lowFlat ? WINTRY_LOWLANDS : BiomeClassifier.SNOWY_PLAINS;
         }
 
