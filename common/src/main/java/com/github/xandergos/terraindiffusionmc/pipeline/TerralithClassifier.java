@@ -254,7 +254,7 @@ public final class TerralithClassifier {
             return s.relElev >= HIGH_M ? VOLCANIC_PEAKS : BASALT_CLIFFS;
         }
         if (s.aboveTreeLine) {
-            return local > Q_MEDIAN ? ROCKY_MOUNTAINS : BiomeClassifier.STONY_PEAKS;
+            return local > Q_MEDIAN ? ROCKY_MOUNTAINS : YOSEMITE_CLIFFS;
         }
         if (heat >= WARM && wet <= SEMIARID) {
             if (wet == HYPERARID) return DESERT_SPIRES;
