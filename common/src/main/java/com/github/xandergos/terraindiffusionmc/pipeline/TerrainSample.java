@@ -11,6 +11,8 @@ public final class TerrainSample {
 
     public float temp;
 
+    public float airC;
+
     public float tReg, relElev, moist, frost;
 
     public float tStd;
@@ -29,7 +31,7 @@ public final class TerrainSample {
 
     public float bareThreshold;
 
-    public boolean aboveTreeLine;
+    public boolean aboveTreeLine, permanentSnow;
 
     public boolean treesNone, treesSparse, treesForest, treesDense, treesRainforest;
 

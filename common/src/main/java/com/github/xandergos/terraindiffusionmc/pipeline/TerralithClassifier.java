@@ -133,7 +133,8 @@ public final class TerralithClassifier {
 
         int zoneHeat = classOf(s.tReg, HEAT_EDGES_C);
         int wet = classOf(s.moist, WET_EDGES);
-        boolean snowy = s.frost < SNOW_LINE_C;
+        // Forest shows its winter snow; treeless ground above the tree line shows only snow the summer leaves
+        boolean snowy = s.aboveTreeLine ? s.permanentSnow : s.frost < SNOW_LINE_C;
 
         if (!snowy && scarletMountain(s, wet)) {
             return SCARLET_MOUNTAINS;
@@ -242,12 +243,12 @@ public final class TerralithClassifier {
         float local = v01(VARIANT_LOCAL, s);
         if (snowy) {
             if (coastal) {
-                return s.temp < BiomeClassifier.FROZEN_SURFACE_C
+                return s.airC < BiomeClassifier.FROZEN_SURFACE_C
                         ? FROZEN_CLIFFS
                         : BiomeClassifier.SNOWY_SLOPES;
             }
             if (!BiomeClassifier.frozenSurface(s)) return BiomeClassifier.SNOWY_SLOPES;
-            if (s.temp < ICE_C && local > GLACIER_THRESHOLD) return GLACIAL_CHASM;
+            if (s.airC < ICE_C && local > GLACIER_THRESHOLD) return GLACIAL_CHASM;
             return local < Q_BOT_25 ? FROZEN_CLIFFS : BiomeClassifier.FROZEN_PEAKS;
         }
         if (heat >= TEMPERATE && volcanic(s)) {
@@ -280,11 +281,11 @@ public final class TerralithClassifier {
         boolean marsh = wetland(s);
         float broad = v01(VARIANT_BROAD, s);
 
-        if (s.relElev >= UPPER_M && s.temp < GEM_PEAK_C && massif(EMERALD, s) > EMERALD_THRESHOLD) {
+        if (s.relElev >= UPPER_M && s.airC < GEM_PEAK_C && massif(EMERALD, s) > EMERALD_THRESHOLD) {
             return EMERALD_PEAKS;
         }
 
-        if (s.temp < ICE_C && (high || steep) && BiomeClassifier.frozenSurface(s)
+        if (s.airC < ICE_C && (high || steep) && BiomeClassifier.frozenSurface(s)
                 && v01(VARIANT_LOCAL, s) > GLACIER_THRESHOLD) {
             return GLACIAL_CHASM;
         }

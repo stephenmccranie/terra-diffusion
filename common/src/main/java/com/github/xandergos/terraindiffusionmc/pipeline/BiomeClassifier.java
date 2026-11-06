@@ -36,6 +36,12 @@ public final class BiomeClassifier {
 
     private static final float TREE_SEASON_MEAN_C = 6.4f;
 
+    // Mean of the warmest three months of a sinusoidal year, above the annual mean, per unit of amplitude
+    private static final float SUMMER_OF_AMPLITUDE = 0.9f;
+
+    // Colder summers than this melt nothing; Ohmura's fit holds from here up
+    private static final float NO_MELT_SUMMER_C = -10f;
+
     // The standard atmosphere cools this much per metre of height
     private static final float AIR_LAPSE = 0.0065f;
 
@@ -143,7 +149,10 @@ public final class BiomeClassifier {
                 float tReg = climate[5 * H * W + idx] + tempNoise[idx];
                 float relElev = (tReg - temp) / lapse;
                 float moist = precip / potentialEvaporation(tReg, tStd) * seasonPenalty;
-                float frost = temp + FROST_NOISE * snowNoise[idx];
+                // Trees, snow and ice feel the air of their ground as the world raised it; climate keeps the
+                // model's height
+                float airC = temp - AIR_LAPSE * climate[6 * H * W + idx];
+                float frost = airC + FROST_NOISE * snowNoise[idx];
 
                 // Growing season
                 float amplitude = tStd * 1.414f;
@@ -160,9 +169,9 @@ public final class BiomeClassifier {
                 float gsFactor = Math.max(0f, Math.min(1f, (growingSeason - 60f) / (150f - 60f)));
                 float effTreeMoisture = treeMoisture * gsFactor;
 
-                // Trees feel the air of their ground as the world raised it, not of the model's height
-                float groundAirC = temp - AIR_LAPSE * climate[6 * H * W + idx];
-                boolean aboveTreeLine = aboveTreeLine(groundAirC, amplitude);
+                boolean aboveTreeLine = aboveTreeLine(airC, amplitude);
+                float summerC = airC + SUMMER_OF_AMPLITUDE * amplitude + FROST_NOISE * snowNoise[idx];
+                boolean permanentSnow = permanentSnow(summerC, precip);
                 if (aboveTreeLine) effTreeMoisture = 0f;
 
                 // Slope-dependent bare threshold
@@ -192,7 +201,7 @@ public final class BiomeClassifier {
                 }
 
                 // Snow classification
-                float snowTemp = temp + snowNoise[idx];
+                float snowTemp = airC + snowNoise[idx];
                 boolean isSteep = slope > 0.78f;
                 boolean hasSnow = snowTemp < SNOW_APPEARS_C && precip > 150f && !isSteep;
 
@@ -213,6 +222,7 @@ public final class BiomeClassifier {
                 sample.altM = altM;
                 sample.slope = slope;
                 sample.temp = temp;
+                sample.airC = airC;
                 sample.tReg = tReg;
                 sample.relElev = relElev;
                 sample.moist = moist;
@@ -225,6 +235,7 @@ public final class BiomeClassifier {
                 sample.growingSeason = growingSeason;
                 sample.effTreeMoisture = effTreeMoisture;
                 sample.aboveTreeLine = aboveTreeLine;
+                sample.permanentSnow = permanentSnow;
                 sample.bareThreshold = bareThreshold;
                 sample.treesNone = treesNone;
                 sample.treesSparse = treesSparse;
@@ -279,13 +290,20 @@ public final class BiomeClassifier {
         return days < TREE_SEASON_MIN_DAYS || meanC + amplitudeC * 2 * Math.cos(start) / arc < TREE_SEASON_MEAN_C;
     }
 
+    // Snow outlasts the summer where a year's precipitation exceeds what the summer melts; at glacier lines
+    // P = 645 + 296 T + 9 T^2 mm for mean summer air temperature T (Ohmura, Kasser and Funk 1992)
+    static boolean permanentSnow(float summerC, float precipMm) {
+        float t = Math.max(NO_MELT_SUMMER_C, summerC);
+        return precipMm > 645f + 296f * t + 9f * t * t;
+    }
+
     // True where a mountain surface may be ice: frozen peaks, frozen cliffs, glacial chasm
     static boolean frozenSurface(TerrainSample s) {
-        return s.temp < FROZEN_SURFACE_C && s.altM > FROZEN_SURFACE_M;
+        return s.airC < FROZEN_SURFACE_C && s.altM > FROZEN_SURFACE_M;
     }
 
     private static byte snowDepthFor(TerrainSample s) {
-        float temp = s.temp;
+        float temp = s.airC;
         if (temp > SNOW_TIER1_START_C) {
             return 1;
         }
@@ -315,7 +333,7 @@ public final class BiomeClassifier {
         if (useTerralith) {
             return TerralithClassifier.river(s);
         }
-        if (s.temp <= -3f) {
+        if (s.airC <= -3f) {
             return FROZEN_RIVER;
         }
         return RIVER;
