@@ -45,7 +45,7 @@ public final class BiomeClassifier {
     // The standard atmosphere cools this much per metre of height
     private static final float AIR_LAPSE = 0.0065f;
 
-    private static final int CLIMATE_CHANNELS = 7;
+    private static final int CLIMATE_CHANNELS = 8;
 
     // Snow cover needs this temperature after noise
     private static final float SNOW_APPEARS_C = -3f;

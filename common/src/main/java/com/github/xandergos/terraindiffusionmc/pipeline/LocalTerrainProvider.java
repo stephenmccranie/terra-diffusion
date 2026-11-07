@@ -60,6 +60,8 @@ public final class LocalTerrainProvider {
         public KarstNetwork karst = KarstNetwork.EMPTY;
         // Minecraft Y of each column's ground, row-major
         public final short[] surfaceY;
+        // Model height in metres of the land's regional base under each column, row-major
+        public final short[] regionalBaseM;
         // Lowest surface Y of each column and the columns CAVE_SIDE blocks around it, row-major
         public final short[] sideSurface;
         // Y range, inclusive and row-major, where a column has river water within RIVER_WALL blocks
@@ -71,7 +73,8 @@ public final class LocalTerrainProvider {
 
         public HeightmapData(short[][] heightmap, short[][] biomeIds, byte[][] snowLayers,
                              short[][] waterLevel, byte[][] climateT, byte[][] climateH,
-                             byte[][] climateE, short[] surfaceY, short[] sideSurface, short[] riverWallLow,
+                             byte[][] climateE, short[] surfaceY, short[] regionalBaseM, short[] sideSurface,
+                             short[] riverWallLow,
                              short[] riverWallHigh, int width, int height) {
             this.heightmap  = heightmap;
             this.biomeIds   = biomeIds;
@@ -81,6 +84,7 @@ public final class LocalTerrainProvider {
             this.climateH   = climateH;
             this.climateE   = climateE;
             this.surfaceY = surfaceY;
+            this.regionalBaseM = regionalBaseM;
             this.sideSurface = sideSurface;
             this.riverWallLow = riverWallLow;
             this.riverWallHigh = riverWallHigh;
@@ -509,6 +513,7 @@ public final class LocalTerrainProvider {
         byte[][] climateH = new byte[tH][tW];
         byte[][] climateE = new byte[tH][tW];
         short[] surfaceY = new short[tH * tW];
+        short[] regionalBaseM = new short[tH * tW];
         short[] sideSurface = new short[tH * tW];
         short[] riverWallLow = new short[tH * tW];
         short[] riverWallHigh = new short[tH * tW];
@@ -538,6 +543,7 @@ public final class LocalTerrainProvider {
                 climateE[r][c] = packUnit(1f - 2f * ((hi - lo) / mpb) / RELIEF_REF);
 
                 surfaceY[t] = (short) groundY[i];
+                regionalBaseM[t] = meters(climate[7 * H * W + i]);
                 int side = groundY[i];
                 for (int dr = -CAVE_SIDE; dr <= CAVE_SIDE; dr += CAVE_SIDE)
                     for (int dc = -CAVE_SIDE; dc <= CAVE_SIDE; dc += CAVE_SIDE)
@@ -556,7 +562,7 @@ public final class LocalTerrainProvider {
                 riverWallHigh[t] = (short) wallHi;
             }
         return new HeightmapData(heightmap, biomeIds, snowLayers, waterLevel, climateT, climateH, climateE,
-                surfaceY, sideSurface, riverWallLow, riverWallHigh, tW, tH);
+                surfaceY, regionalBaseM, sideSurface, riverWallLow, riverWallHigh, tW, tH);
     }
 
     // Window, in blocks, over which local relief sets vanilla's erosion axis

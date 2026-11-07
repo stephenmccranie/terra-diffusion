@@ -156,6 +156,16 @@ public final class TerrainWater {
         return data.surfaceY[localZ * data.width + localX];
     }
 
+    // Model height in metres of the land's regional base under a column, the field the relief curve lifts; without
+    // a terrain model nothing is raised
+    public static float regionalBaseM(int x, int z) {
+        HeightmapData data = tileFor(x, z);
+        if (data == null) return 0f;
+        int localX = Math.max(0, Math.min(data.width - 1, x - tileStart(x)));
+        int localZ = Math.max(0, Math.min(data.height - 1, z - tileStart(z)));
+        return data.regionalBaseM[localZ * data.width + localX];
+    }
+
     public static KarstNetwork karstNetwork(int x, int z) {
         HeightmapData data = tileFor(x, z);
         return data == null || data.karst == null ? KarstNetwork.EMPTY : data.karst;

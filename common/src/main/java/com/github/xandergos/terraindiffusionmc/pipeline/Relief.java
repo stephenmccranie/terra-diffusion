@@ -42,6 +42,20 @@ public record Relief(float start, float full, float gain, float peaks) {
         return KNEE_M + room * (float) Math.tanh((world - KNEE_M) / room);
     }
 
+    // World height of a height band at model height m where the regional base is at model height base, for
+    // features vanilla places by height: the terrain's own transform at that place, with the base's lift fading
+    // out from sea level down to floorM, so the rock the lift put under the land holds the bands below sea level
+    // stretched over it, and the deepslate below floorM stays where it is
+    public float band(float m, float base, float floorM) {
+        float fade = Math.max(0f, Math.min(1f, m / floorM));
+        return apply(m, base) - lift(base) * fade;
+    }
+
+    // Whether ground on this base is raised at all; below start the world keeps the model's heights
+    public boolean raises(float base) {
+        return base > start;
+    }
+
     // How far a base at model height m rises; zero below start, with a slope easing from 0 to gain - 1
     float lift(float m) {
         float t = Math.max(0f, Math.min(m, full) - start);
