@@ -259,6 +259,11 @@ public final class LocalTerrainProvider {
         return getInstance().pipeline.getCoarseSlice(ci0, cj0, ci1, cj1);
     }
 
+    // Sea-level air temperature for a box of native pixels; reads the coarse climate on the inference thread
+    public float[] seaLevelTemperature(int i1, int j1, int i2, int j2) {
+        return pipeline.seaLevelTemperature(i1, j1, i2, j2);
+    }
+
     public HeightmapData fetchHeightmap(int i1, int j1, int i2, int j2) {
         CacheKey key = new CacheKey(i1, j1, i2, j2);
         CacheEntry entry = CACHE.get(key);
