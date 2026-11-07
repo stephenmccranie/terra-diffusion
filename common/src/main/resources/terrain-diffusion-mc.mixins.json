@@ -9,6 +9,7 @@
     "BiomeMixin",
     "BiomeManagerJitterMixin",
     "ChunkGeneratorStructureStateMixin",
+    "HeightRangePlacementMixin",
     "HolderReferenceAccessor",
     "LevelChunkSpillMixin",
     "MinecraftServerMixin",

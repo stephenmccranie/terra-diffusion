@@ -24,7 +24,7 @@ public final class WorldPipeline implements AutoCloseable {
     static final int LATENT_COMPRESSION = WorldPipelineModelConfig.latentCompression();
     static final float SIGMA_DATA = EDMScheduler.SIGMA_DATA;
 
-    static final Relief RELIEF = Relief.fromConfig();
+    public static final Relief RELIEF = Relief.fromConfig();
 
     static final int COARSE_TILE_SIZE   = 64;
     static final int COARSE_TILE_STRIDE = 48;
@@ -481,12 +481,12 @@ public final class WorldPipeline implements AutoCloseable {
         return new float[][]{heights[0], climate};
     }
 
-    // {world height, the model's own height} in metres for a bounding box
+    // {world height, the model's own height, its regional base} in metres for a bounding box
     float[][] heights(int i1, int j1, int i2, int j2) {
         float[][] elev = computeElev(i1, j1, i2, j2);
         float[] world = new float[elev[0].length];
         for (int k = 0; k < world.length; k++) world[k] = RELIEF.apply(elev[0][k], elev[1][k]);
-        return new float[][]{world, elev[0]};
+        return new float[][]{world, elev[0], elev[1]};
     }
 
     // {model elevation, its regional base} in metres; the base is the decoder's denoised low-resolution
@@ -611,7 +611,8 @@ public final class WorldPipeline implements AutoCloseable {
     }
 
     // Channels: temperature at the model's height, its seasonal spread, precipitation, its variation, the
-    // lapse rate, the regional temperature, and how far the world raised the ground above the model's height
+    // lapse rate, the regional temperature, how far the world raised the ground above the model's height, and
+    // the model height of the land's regional base
     private float[] computeClimate(int i1, int j1, int i2, int j2,
                                     float[][] heights, int H, int W) {
         float[] elevFlat = heights[1];
@@ -622,7 +623,7 @@ public final class WorldPipeline implements AutoCloseable {
         int cenH = centralCoarse[0].length, cenW = centralCoarse[0][0].length;
 
         // Bilinear upsample to native resolution
-        float[] climate = new float[7 * H * W];
+        float[] climate = new float[8 * H * W];
         for (int r = 0; r < H; r++) {
             // fractional index into lbt/centralCoarse arrays (matches Python's u = (ii+0.5)/S - ci1 + 0.5)
             float gridY    = (i1 + r + 0.5f) / S - ci1 + 0.5f;
@@ -642,6 +643,7 @@ public final class WorldPipeline implements AutoCloseable {
                 climate[4 * H * W + r * W + c] = beta;
                 climate[5 * H * W + r * W + c] = bilinearSample2D(centralCoarse[2], cenH, cenW, cenGridY, cenGridX);
                 climate[6 * H * W + r * W + c] = heights[0][r * W + c] - heights[1][r * W + c];
+                climate[7 * H * W + r * W + c] = heights[2][r * W + c];
             }
         }
         return climate;

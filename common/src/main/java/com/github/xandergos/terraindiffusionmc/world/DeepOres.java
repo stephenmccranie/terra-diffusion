@@ -1,25 +1,32 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.mixin.HolderReferenceAccessor;
+import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipeline;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.levelgen.heightproviders.HeightProvider;
 import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
 import net.minecraft.world.level.levelgen.feature.configurations.OreConfiguration;
 import net.minecraft.world.level.levelgen.placement.PlacedFeature;
+import net.minecraft.world.level.levelgen.placement.PlacementContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
+import java.util.stream.Stream;
 
-// Rewrites placed features at world load so they suit a world floor of -192
+// Fits vanilla's placements by height to this world: at world load, ore bands reach down to its floor of -192 and stone
+// patches stay out of the deepslate; as features place, bands rise with the relief curve's lift of the land
 public final class DeepOres {
 
     private static final Logger LOG = LoggerFactory.getLogger(DeepOres.class);
@@ -28,8 +35,9 @@ public final class DeepOres {
             !"false".equals(System.getProperty("terradiff.deepOres"));
 
     // Deepslate is pure below Y 0 and mixed up to Y 8, so 8 is the first wholly-stone level
-    private static final int PATCH_FLOOR =
+    private static final int STONE_FLOOR =
             Integer.parseInt(System.getProperty("terradiff.patchFloor", "8"));
+
 
     private static final double PATCH_SCALE =
             Double.parseDouble(System.getProperty("terradiff.patchScale", "0.5"));
@@ -101,7 +109,39 @@ public final class DeepOres {
 
         LOG.info("Ore bands extended to Y {}: {} rewritten, {} already reached the bottom. "
                         + "Stone and dirt patches floored at Y {} and scaled by {}: {}. Left alone: {}",
-                minY, oresExtended, alreadyDeep, PATCH_FLOOR, PATCH_SCALE, patches, failed);
+                minY, oresExtended, alreadyDeep, STONE_FLOOR, PATCH_SCALE, patches, failed);
+    }
+
+    /**
+     * Where a feature placed by height goes in this world. Vanilla made its bands for unraised ground, and the relief
+     * curve lifts the land wherever its regional base stands above relief.start. There each band rises with the
+     * terrain: a band at vanilla Y y lies at the world height Relief#band gives its model height (y - 63) blocks at
+     * this world's metres per block, over the column's regional base, so bands follow the lift and summit stretch
+     * the ground got there, agree between neighbouring columns, and keep their depth under ground above the sea.
+     * Each vanilla block layer becomes as many layers as the transform stretches it, with as many placements, so
+     * ores keep vanilla's density. Deepslate, and ground the curve leaves alone, keeps vanilla's heights and random
+     * draws.
+     */
+    public static Stream<BlockPos> positions(PlacementContext context, RandomSource random, BlockPos pos,
+                                             HeightProvider height) {
+        int y = height.sample(random, context);
+        float base = TerrainWater.regionalBaseM(pos.getX(), pos.getZ());
+        if (y < STONE_FLOOR || !WorldPipeline.RELIEF.raises(base)) return Stream.of(pos.atY(y));
+        double low = bandY(y, base);
+        double span = bandY(y + 1, base) - low;
+        int copies = (int) span + (random.nextDouble() < span - (int) span ? 1 : 0);
+        Stream.Builder<BlockPos> out = Stream.builder();
+        for (int k = 0; k < copies; k++) {
+            out.add(pos.atY((int) Math.floor(low + random.nextDouble() * span)));
+        }
+        return out.build();
+    }
+
+    // World Y, fractional, of the bottom of vanilla's block layer y over a regional base at model height base
+    private static double bandY(int y, float base) {
+        float blockM = TerrainClimate.metresPerBlock();
+        int sea = HeightConverter.SEA_LEVEL;
+        return sea + WorldPipeline.RELIEF.band((y - sea) * blockM, base, (STONE_FLOOR - sea) * blockM) / blockM;
     }
 
     private static boolean hasHeightRange(JsonObject root) {
@@ -154,9 +194,9 @@ public final class DeepOres {
         Integer low = anchor(provider.getAsJsonObject("min_inclusive"), minY, height);
         Integer high = anchor(provider.getAsJsonObject("max_inclusive"), minY, height);
         if (low == null || high == null) return -1;
-        if (high <= PATCH_FLOOR) return -1;
+        if (high <= STONE_FLOOR) return -1;
 
-        if (low < PATCH_FLOOR) provider.add("min_inclusive", absolute(PATCH_FLOOR));
+        if (low < STONE_FLOOR) provider.add("min_inclusive", absolute(STONE_FLOOR));
 
         scale(root, placement, find(placement, "minecraft:count"),
                 find(placement, "minecraft:rarity_filter"), PATCH_SCALE);
