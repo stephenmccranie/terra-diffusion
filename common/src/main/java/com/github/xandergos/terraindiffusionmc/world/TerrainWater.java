@@ -314,11 +314,13 @@ public final class TerrainWater {
     }
 
     /**
-     * Water is filled without fluid updates, so where a river's surface steps down a block or falls, its top water stood
-     * still beside open air, and a boat paddling upstream sank into it. Whenever a chunk starts ticking, top water
-     * standing beside open air above lower water spills over, as it would after any block update: a step becomes a
-     * short rapid of flowing water a boat can climb, and a fall becomes a waterfall. It reads only placed blocks, so it
-     * mends chunks generated before it, and once spilled a chunk has nothing left to do.
+     * Water is filled without fluid updates, so it stood still wherever it met open air: where a river's surface steps
+     * down a block or falls, its top water stood beside air and a boat paddling upstream sank into it, and where a
+     * river or lake runs over a cave, its water hung over the cave as a ceiling. Whenever a chunk starts ticking, that
+     * water spills, as it would after any block update: top water standing beside open air above lower water makes a
+     * step a short rapid of flowing water a boat can climb and a fall a waterfall, and the lowest water hanging over air
+     * pours down into the cave. It reads only placed blocks, so it mends chunks generated before it, and once spilled a
+     * chunk has nothing left to do.
      */
     public static void spillStillWater(LevelChunk chunk) {
         Level level = chunk.getLevel();
@@ -338,6 +340,23 @@ public final class TerrainWater {
                         break;
                     }
                 }
+                spillIntoCave(chunk, level, top, chunk.getHeight(Heightmap.Types.OCEAN_FLOOR, lx, lz));
+            }
+        }
+    }
+
+    // Water resting on its bed has water on the column's highest solid block; air there means the water above hangs
+    // over a cave, so the lowest hanging water block pours down
+    private static void spillIntoCave(LevelChunk chunk, Level level, BlockPos.MutableBlockPos top, int floor) {
+        int surface = top.getY();
+        top.setY(floor + 1);
+        if (!chunk.getBlockState(top).isAir()) return;
+        while (top.getY() < surface) {
+            top.move(Direction.UP);
+            FluidState water = chunk.getFluidState(top);
+            if (water.is(Fluids.WATER)) {
+                if (chunk.getBlockState(top.below()).isAir()) water.tick(level, top);
+                return;
             }
         }
     }
