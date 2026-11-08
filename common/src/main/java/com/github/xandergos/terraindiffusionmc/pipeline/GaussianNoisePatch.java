@@ -1,10 +1,24 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+
 // Deterministic tile-seeded Gaussian noise matching Python world_pipeline.gaussian_noise_patch
 public final class GaussianNoisePatch {
 
     private static final int DEFAULT_TILE_H = 256;
     private static final int DEFAULT_TILE_W = 256;
+
+    // Model windows overlap, so neighbouring windows read the same noise tiles. Windows are computed row by row,
+    // so the tiles of the last two rows of windows are kept: up to 64 tiles, at most 16 MB.
+    private static final int RECENT_TILES = 64;
+    private record TileKey(long baseSeed, int ty, int tx, int channels, int tileH, int tileW) {}
+    private static final Map<TileKey, float[]> RECENT = new LinkedHashMap<>(RECENT_TILES * 2, 0.75f, true) {
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<TileKey, float[]> eldest) {
+            return size() > RECENT_TILES;
+        }
+    };
 
     // Returns a (channels, h, w) patch of standard-normal noise
     public static float[][][] generate(long baseSeed, int y0, int x0, int h, int w,
@@ -26,10 +40,7 @@ public final class GaussianNoisePatch {
                 int ox0 = Math.max(x0, tileX0);
                 int ox1 = Math.min(x0 + w, tileX0 + tileW);
 
-                long seed = PortableRng.tileSeed(baseSeed, ty, tx);
-                int tileLen = channels * tileH * tileW;
-                float[] tileFlat = new float[tileLen];
-                PortableRng.fillStandardNormal(seed, tileFlat, 0, tileLen);
+                float[] tileFlat = tile(new TileKey(baseSeed, ty, tx, channels, tileH, tileW));
 
                 for (int c = 0; c < channels; c++) {
                     for (int py = oy0; py < oy1; py++) {
@@ -45,6 +56,19 @@ public final class GaussianNoisePatch {
             }
         }
         return out;
+    }
+
+    private static float[] tile(TileKey key) {
+        synchronized (RECENT) {
+            float[] tile = RECENT.get(key);
+            if (tile != null) return tile;
+        }
+        float[] tile = new float[key.channels * key.tileH * key.tileW];
+        PortableRng.fillStandardNormal(PortableRng.tileSeed(key.baseSeed, key.ty, key.tx), tile, 0, tile.length);
+        synchronized (RECENT) {
+            RECENT.put(key, tile);
+        }
+        return tile;
     }
 
     public static float[][][] generate(long baseSeed, int y0, int x0, int h, int w, int channels) {

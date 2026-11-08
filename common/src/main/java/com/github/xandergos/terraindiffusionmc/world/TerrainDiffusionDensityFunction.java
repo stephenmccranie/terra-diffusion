@@ -67,15 +67,19 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
         int localX = Math.max(0, Math.min(data.width - 1, x - blockStartX));
         int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
+        return density(data, x, y, z, localX, localZ);
+    }
 
-        int targetHeight = data.surfaceY[localZ * data.width + localX];
-
+    // The density at a block, from the heightmap tile holding its column at (localX, localZ): height above the
+    // block, with caves carved out of the ground
+    public double density(HeightmapData data, int x, int y, int z, int localX, int localZ) {
+        int column = localZ * data.width + localX;
+        int targetHeight = data.surfaceY[column];
         double terrain = targetHeight - y;
-        if (terrain <= 0.0) {
+        if (!caves || terrain <= 0.0) {
             return terrain;
         }
-        return caves ? carve(data, x, y, z, terrain, targetHeight,
-                data.sideSurface[localZ * data.width + localX] - y, localX, localZ) : terrain;
+        return carve(data, x, y, z, terrain, targetHeight, data.sideSurface[column] - y, localX, localZ);
     }
 
     private static final class FillContext {
@@ -130,13 +134,7 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
             int localX = Math.max(0, Math.min(data.width  - 1, x - ctx.blockStartX));
             int localZ = Math.max(0, Math.min(data.height - 1, z - ctx.blockStartZ));
-
-            int targetHeight = data.surfaceY[localZ * data.width + localX];
-            double terrain = targetHeight - y;
-            densities[i] = (!caves || terrain <= 0.0)
-                    ? terrain
-                    : carve(data, x, y, z, terrain, targetHeight,
-                            data.sideSurface[localZ * data.width + localX] - y, localX, localZ);
+            densities[i] = density(data, x, y, z, localX, localZ);
         }
     }
 

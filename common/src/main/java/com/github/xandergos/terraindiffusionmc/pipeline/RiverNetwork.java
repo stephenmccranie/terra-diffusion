@@ -2,10 +2,12 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import java.util.Arrays;
 
-// The river centrelines a region owns, as segments between points along each river with the water level, width,
-// depth and floodplain half-width at both ends. A region owns the segments that start in it, so each stretch of
+// The river centrelines a region draws, as segments between points along each river with the water level, width,
+// depth and floodplain half-width at both ends. A region draws the segments that start in it, so each stretch of
 // river exists once and the rivers of neighbouring regions meet where one region's last segment ends on the other's
-// first. A bucket index finds the segments near a point.
+// first. Where the two disagree, because each sees the land beyond its own window only coarsely, a river one region
+// carries over the line is drawn on as that region traced it (see drawn). A bucket index finds the segments near
+// a point.
 final class RiverNetwork {
 
     // Floats per segment: native i, j, water level, width, depth and floodplain half-width at its upstream end, then
@@ -90,6 +92,115 @@ final class RiverNetwork {
     // Segments of bucket b are members[first[b]] up to members[first[b + 1]]
     private final int[] first, members;
 
+    // Every segment a region traced across its window, in order down each river, the region each lies in, as OWN for
+    // the region itself or a code for the neighbour at row offset code / 3 - 1 and column offset code % 3 - 1, and
+    // the segment its water runs on into: the next along its river, or where its river joins a larger one, the
+    // larger river's segment from the join, or -1 where it ends in standing water
+    static final class Traced {
+        static final byte OWN = 4;
+        // Joins are matched on points rounded to this many per cell
+        private static final float JOIN_GRID = 64f;
+        final float[] seg;
+        final byte[] region;
+        final int[] next;
+        final int count;
+
+        Traced(float[] seg, byte[] region, int count) {
+            this.seg = seg;
+            this.region = region;
+            this.count = count;
+            java.util.Map<Long, Integer> startAt = new java.util.HashMap<>();
+            for (int s = 0; s < count; s++) startAt.putIfAbsent(joinKey(seg[s * STRIDE], seg[s * STRIDE + 1], 0, 0), s);
+            next = new int[count];
+            for (int s = 0; s < count; s++) {
+                next[s] = -1;
+                if (continues(s)) {
+                    next[s] = s + 1;
+                    continue;
+                }
+                float i = seg[s * STRIDE + END], j = seg[s * STRIDE + END + 1];
+                for (int d = 0; d < 9 && next[s] < 0; d++) {
+                    Integer t = startAt.get(joinKey(i, j, d / 3 - 1, d % 3 - 1));
+                    if (t != null && t != s && Math.abs(seg[t * STRIDE] - i) < 1f / JOIN_GRID
+                            && Math.abs(seg[t * STRIDE + 1] - j) < 1f / JOIN_GRID) next[s] = t;
+                }
+            }
+        }
+
+        private static long joinKey(float i, float j, int di, int dj) {
+            return (long) (Math.round(i * JOIN_GRID) + di) << 32 ^ (Math.round(j * JOIN_GRID) + dj) & 0xFFFFFFFFL;
+        }
+
+        // Whether segment s + 1 carries on the river of segment s
+        boolean continues(int s) {
+            int o = s * STRIDE;
+            return s + 1 < count && seg[o + END] == seg[o + STRIDE] && seg[o + END + 1] == seg[o + STRIDE + 1];
+        }
+
+        // The segments that lie in the region itself
+        RiverNetwork own(int regionI, int regionJ, int regionPx, float blockM) {
+            float[] out = new float[count * STRIDE];
+            int n = 0;
+            for (int s = 0; s < count; s++) {
+                if (region[s] == OWN) System.arraycopy(seg, s * STRIDE, out, n++ * STRIDE, STRIDE);
+            }
+            return new RiverNetwork(out, n, regionI, regionJ, regionPx, blockM);
+        }
+    }
+
+    // The region's own segments and those it adopts from each neighbour's trace. Where a neighbour draws a river up to
+    // the line between them, or from it, and the region's own rivers do not carry it on, the region draws the
+    // neighbour's river on its side of the line as the neighbour traced it, until it comes within a width of a river
+    // of the region's own.
+    static RiverNetwork drawn(RiverNetwork own, Traced[] neighbours, int regionI, int regionJ, int regionPx,
+                              float blockM) {
+        float[] out = Arrays.copyOf(own.seg, own.seg.length);
+        int n = own.seg.length / STRIDE;
+        for (int code = 0; code < 9; code++) {
+            Traced from = neighbours[code];
+            if (from == null) continue;
+            // This region as the neighbour codes it
+            byte here = (byte) (8 - code);
+            boolean[] taken = new boolean[from.count];
+            for (int s = 0; s < from.count; s++) {
+                if (from.region[s] != Traced.OWN) continue;
+                for (int t = from.next[s]; t >= 0 && from.region[t] == here && !taken[t]
+                        && own.apart(from.seg, t * STRIDE); t = from.next[t]) {
+                    taken[t] = true;
+                }
+                for (int t = s - 1; t >= 0 && from.continues(t) && from.region[t] == here && !taken[t]
+                        && own.apart(from.seg, t * STRIDE + END); t--) {
+                    taken[t] = true;
+                }
+            }
+            for (int t = 0; t < from.count; t++) {
+                if (!taken[t]) continue;
+                if (n * STRIDE + STRIDE > out.length) out = Arrays.copyOf(out, Math.max(STRIDE, out.length * 2));
+                System.arraycopy(from.seg, t * STRIDE, out, n++ * STRIDE, STRIDE);
+            }
+        }
+        return new RiverNetwork(out, n, regionI, regionJ, regionPx, blockM);
+    }
+
+    // Whether the river point at seg[o] lies more than its width from every river of this network
+    private boolean apart(float[] point, int o) {
+        float i = point[o], j = point[o + 1];
+        float widthCells = point[o + 3] / RiverHydrology.CELL_SIZE_M;
+        int bi = (int) Math.floor((i - originI) / BUCKET), bj = (int) Math.floor((j - originJ) / BUCKET);
+        if (bi < 0 || bj < 0 || bi >= side || bj >= side) return true;
+        int b = bi * side + bj;
+        for (int m = first[b]; m < first[b + 1]; m++) {
+            int q = members[m] * STRIDE;
+            float ai = seg[q], aj = seg[q + 1];
+            float di = seg[q + END] - ai, dj = seg[q + END + 1] - aj;
+            float len2 = di * di + dj * dj;
+            float t = len2 > 0f ? Math.max(0f, Math.min(1f, ((i - ai) * di + (j - aj) * dj) / len2)) : 0f;
+            float oi = ai + di * t - i, oj = aj + dj * t - j;
+            if (oi * oi + oj * oj < widthCells * widthCells) return false;
+        }
+        return true;
+    }
+
     private RiverNetwork(float[] seg, int count, int regionI, int regionJ, int regionPx, float blockM) {
         this.seg = Arrays.copyOf(seg, count * STRIDE);
         this.blockM = blockM;
@@ -162,13 +273,13 @@ final class RiverNetwork {
         return a + (b - a) * t;
     }
 
-    // Traces the rivers of a drained window into the segments its region owns, and writes each river cell's water
+    // Traces the rivers of a drained window into segments across the whole window, and writes each river cell's water
     // level and width into levelOut and widthOut. Rivers are the channel cells: each sends its water to its down
     // cell over ground filled to filled, and carries acc of catchment. A river begins in the lake it drains, if it
     // drains one, and ends in the water its last cell drains to.
-    static RiverNetwork trace(int regionI, int regionJ, int regionPx, int windowI, int windowJ, int grid,
-                              boolean[] channel, int[] down, float[] acc, float[] filled, float[] elev,
-                              boolean[] water, float[] waterLevel, float blockM, float[] levelOut, float[] widthOut) {
+    static Traced trace(int regionI, int regionJ, int regionPx, int windowI, int windowJ, int grid,
+                        boolean[] channel, int[] down, float[] acc, float[] filled, float[] elev,
+                        boolean[] water, float[] waterLevel, float blockM, float[] levelOut, float[] widthOut) {
         int n = 0;
         for (boolean c : channel) if (c) n++;
         int[] cell = new int[n];
@@ -221,8 +332,8 @@ final class RiverNetwork {
         float[] vi = new float[n], vj = new float[n], pi = new float[n], pj = new float[n];
         float[] level = new float[n], width = new float[n], depth = new float[n];
         Chain ch = new Chain(n + 2);
-        long own = (long) regionI << 32 | (regionJ & 0xFFFFFFFFL);
         float[] seg = new float[STRIDE * 1024];
+        byte[] segRegion = new byte[1024];
         int count = 0;
         for (long packed : order) {
             int h = (int) packed;
@@ -356,8 +467,12 @@ final class RiverNetwork {
             }
 
             for (int p = 0; p + 1 < m; p++) {
-                if (regionOf(ch.at[p], grid, windowI, windowJ, regionPx) != own) continue;
-                if (count * STRIDE + STRIDE > seg.length) seg = Arrays.copyOf(seg, seg.length * 2);
+                if (count == segRegion.length) {
+                    seg = Arrays.copyOf(seg, seg.length * 2);
+                    segRegion = Arrays.copyOf(segRegion, segRegion.length * 2);
+                }
+                long at = regionOf(ch.at[p], grid, windowI, windowJ, regionPx);
+                segRegion[count] = (byte) (((at >> 32) - regionI + 1) * 3 + ((int) at - regionJ + 1));
                 int o = count++ * STRIDE;
                 for (int e = 0; e < 2; e++) {
                     int q = p + e, f = o + END * e;
@@ -370,7 +485,7 @@ final class RiverNetwork {
                 }
             }
         }
-        return new RiverNetwork(seg, count, regionI, regionJ, regionPx, blockM);
+        return new Traced(seg, segRegion, count);
     }
 
     // The points of one chain as it is traced: where each is (its valley, then its channel), the direction across

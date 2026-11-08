@@ -35,10 +35,7 @@
       "caves": false
     },
     "final_density": {
-      "type": "minecraft:cache_all_in_cell",
-      "argument": {
-        "type": "terrain-diffusion-mc:terrain_diffusion"
-      }
+      "type": "terrain-diffusion-mc:terrain_diffusion"
     },
     "vein_toggle": 0,
     "vein_ridged": 0,
