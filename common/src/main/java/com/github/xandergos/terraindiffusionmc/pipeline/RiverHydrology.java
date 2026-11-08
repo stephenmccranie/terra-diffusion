@@ -5,8 +5,11 @@ import com.github.xandergos.terraindiffusionmc.infinitetensor.InfiniteTensor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -140,11 +143,13 @@ public final class RiverHydrology {
     public static void prepare(WorldPipeline pipeline, int i0, int j0, int i1, int j1, float blockM) {
         int ri0 = Math.floorDiv(i0, REGION_PX), ri1 = Math.floorDiv(i1 - 1, REGION_PX);
         int rj0 = Math.floorDiv(j0, REGION_PX), rj1 = Math.floorDiv(j1 - 1, REGION_PX);
+        List<PriorityExecutor.Task<Region>> asked = new ArrayList<>();
         for (int ri = ri0; ri <= ri1; ri++) {
             for (int rj = rj0; rj <= rj1; rj++) {
-                regionFor(pipeline, ri, rj, blockM);
+                asked.add(request(pipeline, ri, rj, blockM, PriorityExecutor.callerPriority()));
             }
         }
+        asked.forEach(PriorityExecutor::join);
     }
 
     // Queues every neighbour of every region within a quarter region of the native rectangle that nobody has
@@ -203,31 +208,39 @@ public final class RiverHydrology {
                 if (dj < 0 ? fj >= reach : dj > 0 && fj < REGION_PX - reach) continue;
                 boolean own = di == 0 && dj == 0;
                 if (!own && !cache.seamNeighbours && !cache.regions.containsKey(key(ri + di, rj + dj))) continue;
-                Region region = regionFor(pipeline, ri + di, rj + dj, blockM);
-                if (region != null) rivers(pipeline, region, blockM).gather(nativeI, nativeJ, out);
+                rivers(pipeline, ri + di, rj + dj, blockM).gather(nativeI, nativeJ, out);
             }
         }
     }
 
     // The rivers a region draws: its own, and those it takes on from its neighbours' traces where they carry a river
     // over the line between them and it does not. Settled when the region is first sampled, from all eight
-    // neighbours, so it comes out the same whoever asks first.
-    private static RiverNetwork rivers(WorldPipeline pipeline, Region region, float blockM) {
-        RiverNetwork drawn = region.drawn;
-        if (drawn == null) {
-            RegionCache cache = pipeline.hydrology;
-            RiverNetwork.Traced[] neighbours = new RiverNetwork.Traced[9];
-            for (int code = 0; code < 9; code++) {
-                int ri = region.regionI + code / 3 - 1, rj = region.regionJ + code % 3 - 1;
-                if (code == RiverNetwork.Traced.OWN
-                        || !cache.seamNeighbours && !cache.regions.containsKey(key(ri, rj))) continue;
-                Region neighbour = regionFor(pipeline, ri, rj, blockM);
-                if (neighbour != null) neighbours[code] = neighbour.traced;
-            }
-            drawn = RiverNetwork.drawn(region.own, neighbours, region.regionI, region.regionJ, REGION_PX, blockM);
-            region.drawn = drawn;
+    // neighbours, so it comes out the same whoever asks first. Until then all nine regions are asked for before any
+    // is waited on, so they build side by side.
+    private static RiverNetwork rivers(WorldPipeline pipeline, int regionI, int regionJ, float blockM) {
+        int priority = PriorityExecutor.callerPriority();
+        PriorityExecutor.Task<Region> asked = request(pipeline, regionI, regionJ, blockM, priority);
+        if (asked.isDone()) {
+            RiverNetwork drawn = PriorityExecutor.join(asked).drawn;
+            if (drawn != null) return drawn;
         }
-        return drawn;
+        RegionCache cache = pipeline.hydrology;
+        List<PriorityExecutor.Task<Region>> neighbours = new ArrayList<>(Collections.nCopies(9, null));
+        for (int code = 0; code < 9; code++) {
+            int ri = regionI + code / 3 - 1, rj = regionJ + code % 3 - 1;
+            if (code == RiverNetwork.Traced.OWN
+                    || !cache.seamNeighbours && !cache.regions.containsKey(key(ri, rj))) continue;
+            neighbours.set(code, request(pipeline, ri, rj, blockM, priority));
+        }
+        Region region = PriorityExecutor.join(asked);
+        if (region.drawn == null) {
+            RiverNetwork.Traced[] traced = new RiverNetwork.Traced[9];
+            for (int code = 0; code < 9; code++) {
+                if (neighbours.get(code) != null) traced[code] = PriorityExecutor.join(neighbours.get(code)).traced;
+            }
+            region.drawn = RiverNetwork.drawn(region.own, traced, regionI, regionJ, REGION_PX, blockM);
+        }
+        return region.drawn;
     }
 
     private static float lerp(float a, float b, float t) {

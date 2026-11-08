@@ -16,26 +16,18 @@ public final class PortableRng {
         return h;
     }
 
-    // One PCG64 step: (state * MULT + INC) & MASK64, output 32-bit XSH-RR
-    public static long[] pcg64Next(long state) {
-        state = (state * PCG64_MULT + PCG64_INC) & MASK64;
-        long x = (((state >>> 18) ^ state) >>> 27) & 0xFFFFFFFFL;
-        int rot = (int) (state >>> 59);
-        long out32 = ((x >>> rot) | (x << ((32 - rot) & 31))) & 0xFFFFFFFFL;
-        return new long[]{state, out32};
-    }
-
-    // Fill out[offset..offset+length) with standard normals using Marsaglia polar
+    // Fill out[offset..offset+length) with standard normals using Marsaglia polar, each drawing a pair of PCG64
+    // steps: state * MULT + INC, output 32-bit XSH-RR
     public static void fillStandardNormal(long seed, float[] out, int offset, int length) {
-        long state = seed & MASK64;
+        long state = seed;
         int i = 0;
         while (i < length) {
-            long[] r1 = pcg64Next(state);
-            state = r1[0];
-            long[] r2 = pcg64Next(state);
-            state = r2[0];
-            double v1 = 2.0 * (r1[1] + 1.0) * INV_2P32 - 1.0;
-            double v2 = 2.0 * (r2[1] + 1.0) * INV_2P32 - 1.0;
+            state = state * PCG64_MULT + PCG64_INC;
+            long r1 = xshRr(state);
+            state = state * PCG64_MULT + PCG64_INC;
+            long r2 = xshRr(state);
+            double v1 = 2.0 * (r1 + 1.0) * INV_2P32 - 1.0;
+            double v2 = 2.0 * (r2 + 1.0) * INV_2P32 - 1.0;
             double s = v1 * v1 + v2 * v2;
             if (s > 0.0 && s < 1.0) {
                 double f = Math.sqrt(-2.0 * Math.log(s) / s);
@@ -47,5 +39,11 @@ public final class PortableRng {
                 }
             }
         }
+    }
+
+    private static long xshRr(long state) {
+        long x = (((state >>> 18) ^ state) >>> 27) & 0xFFFFFFFFL;
+        int rot = (int) (state >>> 59);
+        return ((x >>> rot) | (x << ((32 - rot) & 31))) & 0xFFFFFFFFL;
     }
 }
