@@ -83,7 +83,11 @@ public final class RiverHydrology {
 
     public static final class Region {
         final int regionI, regionJ;
-        final RiverNetwork rivers;
+        // Every river the region traced across its window, the ones in the region itself, and the ones it draws
+        // once its neighbours are known
+        final RiverNetwork.Traced traced;
+        final RiverNetwork own;
+        volatile RiverNetwork drawn;
         final float[] lake;
         final float[] lakeDeep;
         final KarstNetwork karst;
@@ -92,10 +96,12 @@ public final class RiverHydrology {
         // Whether each body survives comparison with its neighbours, judged when first sampled
         final byte[] bodyVerdict;
 
-        Region(int regionI, int regionJ, RiverNetwork rivers, float[] lake, float[] lakeDeep, KarstNetwork karst) {
+        Region(int regionI, int regionJ, RiverNetwork.Traced traced, float[] lake, float[] lakeDeep,
+               KarstNetwork karst, float blockM) {
             this.regionI = regionI;
             this.regionJ = regionJ;
-            this.rivers = rivers;
+            this.traced = traced;
+            this.own = traced.own(regionI, regionJ, REGION_PX, blockM);
             this.lake = lake;
             this.lakeDeep = lakeDeep;
             this.karst = karst;
@@ -197,9 +203,30 @@ public final class RiverHydrology {
                 boolean own = di == 0 && dj == 0;
                 if (!own && !cache.seamNeighbours && !cache.regions.containsKey(key(ri + di, rj + dj))) continue;
                 Region region = regionFor(pipeline, ri + di, rj + dj, blockM);
-                if (region != null) region.rivers.gather(nativeI, nativeJ, out);
+                if (region != null) rivers(pipeline, region, blockM).gather(nativeI, nativeJ, out);
             }
         }
+    }
+
+    // The rivers a region draws: its own, and those it takes on from its neighbours' traces where they carry a river
+    // over the line between them and it does not. Settled when the region is first sampled, from all eight
+    // neighbours, so it comes out the same whoever asks first.
+    private static RiverNetwork rivers(WorldPipeline pipeline, Region region, float blockM) {
+        RiverNetwork drawn = region.drawn;
+        if (drawn == null) {
+            RegionCache cache = pipeline.hydrology;
+            RiverNetwork.Traced[] neighbours = new RiverNetwork.Traced[9];
+            for (int code = 0; code < 9; code++) {
+                int ri = region.regionI + code / 3 - 1, rj = region.regionJ + code % 3 - 1;
+                if (code == RiverNetwork.Traced.OWN
+                        || !cache.seamNeighbours && !cache.regions.containsKey(key(ri, rj))) continue;
+                Region neighbour = regionFor(pipeline, ri, rj, blockM);
+                if (neighbour != null) neighbours[code] = neighbour.traced;
+            }
+            drawn = RiverNetwork.drawn(region.own, neighbours, region.regionI, region.regionJ, REGION_PX, blockM);
+            region.drawn = drawn;
+        }
+        return drawn;
     }
 
     private static float lerp(float a, float b, float t) {
@@ -643,14 +670,14 @@ public final class RiverHydrology {
         float[] width = new float[GRID * GRID];
         Arrays.fill(level, Float.NaN);
         InfiniteTensor.throwIfCancelled();
-        RiverNetwork rivers = RiverNetwork.trace(regionI, regionJ, REGION_PX, windowI, windowJ, GRID, channel, down,
-                acc, filled, elev, outlet, outletLevel, blockM, level, width);
+        RiverNetwork.Traced traced = RiverNetwork.trace(regionI, regionJ, REGION_PX, windowI, windowJ, GRID, channel,
+                down, acc, filled, elev, outlet, outletLevel, blockM, level, width);
 
         InfiniteTensor.throwIfCancelled();
         KarstNetwork karst = KarstHydrology.solve(regionI, regionJ, windowI, windowJ, GRID,
                 elev, acc, channel, fillDepth, level, lake, width, down, REGION_PX, MARGIN_PX, blockM);
         InfiniteTensor.throwIfCancelled();
-        return new Region(regionI, regionJ, rivers, crop(lake), crop(lakeDeep), karst);
+        return new Region(regionI, regionJ, traced, crop(lake), crop(lakeDeep), karst, blockM);
     }
 
     // Cells from each cell to the nearest target cell
