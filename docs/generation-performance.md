@@ -1,77 +1,69 @@
 # Chunk-generation performance
 
-Five changes avoid redundant work while preserving terrain calculations:
+Chunk workers spend most of their time in vanilla stages (surface rules, features, chunk
+storage). The fork keeps its own share small and keeps the GPU and region builds ahead of
+the workers.
 
-- Request exact bulk density evaluation with Minecraft's cell cache.
-- Return zero outside conservative structure-influence bounds.
-- Skip density cells above the terrain, water and structure ceiling.
-- Replace biome jitter's modulo 1024 with an equivalent bit mask.
-- Supply the DirectML decoder's fixed input dimensions, keeping batch size one.
+## Chunk workers
 
-The density function and shared heightmap cache remain original fork sources.
+- **Column fill.** With aquifers and ore veins off, the noise stage reduces to: the default
+  block where terrain density plus structure blending is positive, otherwise the fluid
+  picker's fluid or air. `TerrainFill` places exactly that a column at a time, without the
+  noise chunk's cells and interpolation, and sets each worldgen heightmap once per column.
+- **Fill ceiling.** The fill stops at the chunk's highest ground, water or structure
+  influence instead of filling the 2160-block world height.
+- **Bounded structure blending.** `BoundedBeardifier` returns zero outside the structures'
+  influence boxes, and its top bounds the ceiling.
+- **Cave lattice.** `DeepCaverns` evaluates its 3D noise on a 4-block lattice and
+  interpolates.
 
-## Measurements
+Chunks the fill does not cover (blending, aquifers, ore veins, other density functions,
+incomplete height data) take the generator's own fill.
 
-Compared with original fork commit `9086fe3`, using independent JVMs and 1,024 fresh
-FULL chunks per run. Startup, the preflight region and result serialization are
-outside the timed request; dependency chunks required by generation are included.
+## Terrain and river regions
 
-| Workload | Original mean | Optimized mean | Less elapsed time |
-| --- | ---: | ---: | ---: |
-| Cached terrain tensors | 20.081 s | 8.246 s | 58.9% |
-| Cold terrain inference | 27.622 s | 16.467 s | 40.4% |
-
-Cached measurements use three original controls and two optimized trials within
-an isolation/removal matrix. Original observations are 21.935 / 21.580 / 16.728 s;
-optimized observations are 8.018 / 8.475 s. Cold runs use original/optimized/optimized/
-original order: 27.526 / 27.718 s original and 16.572 / 16.362 s optimized, with
-323 timed model calls each. These are workload-specific estimates with limited repeats.
-
-All tests ran on the desktop in a dedicated instance: Ryzen 7 5700X3D, RX 7900 GRE,
-Java 21, Minecraft 1.21.1, NeoForge 21.1.265, C2ME 0.4.0-alpha.0.122, Terralith 2.6.2
-and Lithostitched 1.8.1. Seed 734829105, scale 4, tile size 256, minimum Y -192 and
-dimension height 1600 were fixed. Both variants use sixteen C2ME workers, its density
-compiler and resident DirectML models. Cached runs make no timed model calls.
-
-## Scheduling
+- **Drainage.** River regions drain with one shore-seeded flood that shares a queue between
+  pits and slopes, and accumulate flow in topological order rather than by sorting.
+- **Joined requests.** A tile asks for all nine regions it needs before waiting on any.
+- **Prefetch.** Regions within a quarter region of a finished tile are queued in the
+  background, so they are usually ready before generation reaches them.
+- **Inference.** The DirectML decoder gets its fixed input dimensions; tensors are added
+  row by row; overlapping model windows share their noise tiles; the 25 most recent
+  regions stay cached.
 
 The inference thread runs only model calls and tensor-cache reads. A terrain tile is
 computed by the first thread that needs it, and a river region on a two-thread pool,
-since one build holds about 1 GB of working arrays. Everyone else waits for that one
-result. Each request waits at the urgency of whoever needs it: the main thread before a
-chunk worker, and both before regions nobody has asked for yet. Regions within a quarter
-region of a finished tile are queued in the background, so they are usually ready before
-generation reaches them. The explorer builds its regions on the inference thread itself.
+since one build holds about 1 GB of working arrays. Each request waits at the urgency of
+whoever needs it: the main thread before a chunk worker, and both before prefetched
+regions. The explorer builds its regions on the inference thread itself.
 
-This removes waiting, not work: CPU per chunk is unchanged. Before it, chunk workers
-spent about half their time waiting on that one thread while it built a region, and the
-GPU was busy only in short bursts.
+## What each part is worth
 
-Chunky pregeneration of 1024-block tiles in a fresh world, on the same desktop with
-C2ME (eight workers), Lithium, ModernFix, Terralith, Chunky and Distant Horizons,
-resident DirectML models and scale 4:
+Chunky pregeneration of six 1024-block tiles in a fresh scale-4 world on a Ryzen 7
+5700X3D and RX 7900 GRE with DirectML, C2ME (eight workers), Lithium, ModernFix and
+Terralith, without Distant Horizons. The first tile includes cold model and region work;
+steady figures are tiles two to six. The full build averages 300 chunks/s steady
+(290–309 over eight runs), 38.5 CPU-ms per chunk and a 78 s first tile. Each row
+removes one part and keeps the rest:
 
-| Workload | Before | After |
-| --- | ---: | ---: |
-| Two tiles, chunks per second | 96.8 | 112.8 |
-| Two tiles, CPU-ms per chunk | 81.2 | 80.0 |
-| Six tiles in a sweep, chunks per second | 124–127 | 143–145 |
+| Removed | Steady chunks/s | CPU-ms/chunk | First tile |
+| --- | ---: | ---: | ---: |
+| Fill ceiling | 240 | 46.1 | 82 s |
+| Prefetch | 257 | 36.6 | 67 s |
+| Column fill | 268 | 42.4 | 78 s |
+| Drainage | 270 | 40.6 | 89 s |
+| Cave lattice | 284 | 40.3 | 79 s |
+| Joined requests | 287 | 39.7 | 93 s |
+| Bounded blending in the fill | 293 | 39.2 | 78 s |
+| Decoder dimensions | 297 | 38.8 | 88 s |
+| Row-wise tensor add | 305 | 38.2 | 85 s |
 
-The gain depends on idle CPU: a machine that is already saturated sees little of it.
+Noise-tile sharing and the 25-region cache show nothing alone but slow new regions when
+removed along with other parts.
 
-## Correctness and compatibility
+## Correctness
 
-- All 1,024 cold NOISE chunks match the original after excluding only `LastUpdate`
-  and `InhabitedTime`. All 323 model-output tensors' raw-bit SHA-256 hashes match.
-- Density, height, ceiling, fluid and cave fixtures pass across six scales and
-  sixteen workers. Structure fixtures cover adjustment types and influence boundaries.
-- A 4,232-tile churn check finds no tile retention outside the shared cache.
-- Earlier checks cover C2ME absent/present, its compiler disabled/enabled, model
-  offloading enabled/disabled and minimal versus Terralith mod stacks.
-- NeoForge CPU build and Fabric compilation pass. Combined with scale-aware village
-  placement, the eight village tests and full Fabric/NeoForge CPU builds also pass.
-
-FULL decoration varies between untouched original repeats, so full decorated-chunk
-identity is not claimed. Unsupported density wrappers, blending, aquifers, ore veins,
-custom structure-blending implementations or incomplete height data retain full-height
-filling. Model weights, precision and inference batching are unchanged.
+The column fill was checked in game against the generator's own fill on 26,500 chunks:
+blocks, section flags and worldgen heightmaps identical. Drainage and joined requests give
+the same lakes and rivers to float rounding, and the inference changes are bit-identical.
+The cave lattice moves 2–3% of open cave blocks.

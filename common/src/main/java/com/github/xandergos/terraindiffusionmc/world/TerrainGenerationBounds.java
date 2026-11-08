@@ -7,22 +7,12 @@ import net.minecraft.world.level.levelgen.DensityFunctions;
 
 /** Conservative terrain/fluid ceiling; unsupported data keeps the full generation range. */
 public final class TerrainGenerationBounds {
-    // The marker's enum is not public; compare with the exact vanilla marker instead.
-    private static final DensityFunctions.MarkerOrMarked CELL_CACHE_MARKER =
-            (DensityFunctions.MarkerOrMarked) DensityFunctions.cacheAllInCell(DensityFunctions.zero());
     private TerrainGenerationBounds() {}
 
-    // The terrain-diffusion density a final density is, through holders and a cell cache; null if it is anything else
+    // The terrain-diffusion density a final density is, through holders; null if it is anything else
     public static TerrainDiffusionDensityFunction terrain(DensityFunction density) {
-        while (true) {
-            if (density instanceof DensityFunctions.HolderHolder holder) density = holder.function().value();
-            else if (density.getClass() == CELL_CACHE_MARKER.getClass()
-                    && density instanceof DensityFunctions.MarkerOrMarked marker
-                    && marker.type() == CELL_CACHE_MARKER.type())
-                density = marker.wrapped();
-            else return density.getClass() == TerrainDiffusionDensityFunction.class
-                    ? (TerrainDiffusionDensityFunction) density : null;
-        }
+        while (density instanceof DensityFunctions.HolderHolder holder) density = holder.function().value();
+        return density.getClass() == TerrainDiffusionDensityFunction.class ? (TerrainDiffusionDensityFunction) density : null;
     }
 
     public static long upperY(HeightmapData data, int x0, int z0, int scale, int seaLevel) {
