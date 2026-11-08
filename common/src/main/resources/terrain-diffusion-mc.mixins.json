@@ -11,6 +11,7 @@
     "ChunkGeneratorStructureStateMixin",
     "HeightRangePlacementMixin",
     "HolderReferenceAccessor",
+    "LevelChunkSectionAccessor",
     "LevelChunkSpillMixin",
     "MinecraftServerMixin",
     "NoiseBasedChunkGeneratorAccessor",
