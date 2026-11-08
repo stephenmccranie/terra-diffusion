@@ -102,7 +102,7 @@ public final class WaterNetwork {
         return (float) Math.ceil(Math.floor(meters / metersPerBlock) * metersPerBlock);
     }
 
-    // A river's water surface, whole blocks up from sea level
+    // The surface of water at a level, whole blocks up from sea level
     private static float water(float levelM, float metersPerBlock) {
         return levelM > 0f ? snapToBlock(levelM, metersPerBlock) : 0f;
     }
@@ -113,7 +113,7 @@ public final class WaterNetwork {
     }
 
     public static void sample(int worldX, int worldZ, float elevM, float smoothElevM, Reaches rivers,
-                              float lakeSurfaceM, float lakeDeepM, float metersPerBlock, Sample out) {
+                              float lakeLevelM, float lakeDeepM, float metersPerBlock, Sample out) {
         out.bedElevM = elevM;
         out.waterSurfaceM = NO_WATER;
 
@@ -163,7 +163,7 @@ public final class WaterNetwork {
             return;
         }
 
-        boolean inBasin = lakeSurfaceM > NO_WATER;
+        boolean inBasin = lakeLevelM > NO_WATER;
         float groundM = elevM + (smoothElevM - elevM) * (inBasin ? 1f : near);
         float bed;
         if (surfaceM > NO_WATER) {
@@ -176,14 +176,17 @@ public final class WaterNetwork {
             }
         }
 
-        if (inBasin && lakeDeepM > 0.01f) {
-            float here = Math.max(0f, lakeSurfaceM - groundM);
+        // A lake's water stands at the whole block below its level and covers all ground below that level, so it
+        // fills the basin its rivers drain into
+        float lakeSurfaceM = inBasin ? water(lakeLevelM, metersPerBlock) : NO_WATER;
+        float here = inBasin ? lakeLevelM - groundM : 0f;
+        if (here > 0f) {
             float t = clamp01(here / lakeDeepM);
             t = t * t * (3f - 2f * t);
             float target = Math.min(LAKE_MAX_BED_BLOCKS * metersPerBlock,
                     Math.max(LAKE_MIN_BED_BLOCKS * metersPerBlock, LAKE_DEPTH_GAIN * lakeDeepM));
             float shaped = bed + (lakeSurfaceM - target * t - bed) * t;
-            bed = Math.min(shaped, Math.max(bed, lakeSurfaceM - 0.6f * metersPerBlock));
+            bed = Math.min(shaped, lakeSurfaceM - 0.6f * metersPerBlock);
         }
         out.bedElevM = bed;
 

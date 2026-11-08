@@ -77,6 +77,10 @@ public final class RiverHydrology {
 
     private static final int LAKE_MIN_LANDMASS_CELLS = 20000;
 
+    // A river reaches the sea where the ground below sea level lies this many cells from any dry ground. Before
+    // that, in a puddle, a creek or the shallows along a coast, it runs on in a channel of its own width.
+    private static final float OPEN_SEA_CELLS = 4f;
+
     public static final class Region {
         final int regionI, regionJ;
         final RiverNetwork rivers;
@@ -320,7 +324,7 @@ public final class RiverHydrology {
             return null;
         }
         float deep = Float.isNaN(region.lakeDeep[at]) ? 0f : region.lakeDeep[at];
-        return new float[]{(float) Math.ceil(Math.floor(near / blockM) * blockM), deep};
+        return new float[]{near, deep};
     }
 
     private static int[] landmassArea(float[] elev) {
@@ -590,13 +594,19 @@ public final class RiverHydrology {
         }
 
         InfiniteTensor.throwIfCancelled();
-        float[] seaDist = seaDistance(elev);
+        boolean[] below = new boolean[GRID * GRID], dry = new boolean[GRID * GRID];
+        for (int i = 0; i < GRID * GRID; i++) {
+            below[i] = elev[i] < 0f;
+            dry[i] = !below[i];
+        }
+        float[] seaDist = distanceTo(below);
+        float[] shoreDist = distanceTo(dry);
         int[] landArea = landmassArea(elev);
         float[][] climate = waterBalance(pipeline, windowI, windowJ, GRID, 1);
         float[] entering = inflow(pipeline, windowI, windowJ, elev);
 
         boolean[] sink = new boolean[GRID * GRID];
-        for (int i = 0; i < GRID * GRID; i++) sink[i] = elev[i] < 0f;
+        for (int i = 0; i < GRID * GRID; i++) sink[i] = shoreDist[i] >= OPEN_SEA_CELLS;
         float[] lake = new float[GRID * GRID];
         float[] lakeDeep = new float[GRID * GRID];
         Arrays.fill(lake, Float.NaN);
@@ -618,7 +628,7 @@ public final class RiverHydrology {
         float[] outletLevel = new float[GRID * GRID];
         for (int i = 0; i < GRID * GRID; i++) {
             outlet[i] = sink[i] || drained.basin[i] >= 0;
-            outletLevel[i] = elev[i] < 0f ? 0f : Float.isNaN(lake[i]) ? elev[i] : lake[i];
+            outletLevel[i] = below[i] ? 0f : Float.isNaN(lake[i]) ? elev[i] : lake[i];
         }
 
         boolean[] channel = new boolean[GRID * GRID];
@@ -643,12 +653,13 @@ public final class RiverHydrology {
         return new Region(regionI, regionJ, rivers, crop(lake), crop(lakeDeep), karst);
     }
 
-    private static float[] seaDistance(float[] elev) {
+    // Cells from each cell to the nearest target cell
+    private static float[] distanceTo(boolean[] target) {
         int n = GRID * GRID;
         float[] d = new float[n];
         float far = GRID * 2f;
         for (int i = 0; i < n; i++) {
-            d[i] = elev[i] < 0f ? 0f : far;
+            d[i] = target[i] ? 0f : far;
         }
         final float ORTH = 1f, DIAG = 1.41421f;
         for (int r = 0; r < GRID; r++)
