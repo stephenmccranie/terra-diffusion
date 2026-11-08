@@ -15,7 +15,7 @@
     "MinecraftServerMixin",
     "NoiseBasedChunkGeneratorAccessor",
     "NoiseBasedChunkGeneratorBeardifierMixin",
-    "NoiseBasedChunkGeneratorCeilingMixin",
+    "NoiseBasedChunkGeneratorFillMixin",
     "NoiseBasedChunkGeneratorFluidMixin",
     "SnowAndFreezeFeatureMixin",
     "StructureMixin"

@@ -12,14 +12,16 @@ public final class TerrainGenerationBounds {
             (DensityFunctions.MarkerOrMarked) DensityFunctions.cacheAllInCell(DensityFunctions.zero());
     private TerrainGenerationBounds() {}
 
-    public static boolean supports(DensityFunction density) {
+    // The terrain-diffusion density a final density is, through holders and a cell cache; null if it is anything else
+    public static TerrainDiffusionDensityFunction terrain(DensityFunction density) {
         while (true) {
             if (density instanceof DensityFunctions.HolderHolder holder) density = holder.function().value();
             else if (density.getClass() == CELL_CACHE_MARKER.getClass()
                     && density instanceof DensityFunctions.MarkerOrMarked marker
                     && marker.type() == CELL_CACHE_MARKER.type())
                 density = marker.wrapped();
-            else return density.getClass() == TerrainDiffusionDensityFunction.class;
+            else return density.getClass() == TerrainDiffusionDensityFunction.class
+                    ? (TerrainDiffusionDensityFunction) density : null;
         }
     }
 
