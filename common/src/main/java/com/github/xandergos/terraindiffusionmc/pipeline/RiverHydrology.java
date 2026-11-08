@@ -10,6 +10,7 @@ import java.util.Comparator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.stream.IntStream;
 
 public final class RiverHydrology {
 
@@ -110,9 +111,9 @@ public final class RiverHydrology {
         }
     }
 
-    // Room for the 4x4 regions prefetched around a tile at a region corner, so prefetching does not evict a
-    // region generation still needs
-    private static final int MAX_CACHED_REGIONS = 16;
+    // A tile at a region corner reads the 4x4 regions around it, since each region draws rivers from its eight
+    // neighbours; room for a 5x5 block keeps those while generation moves on and the next row is prefetched
+    private static final int MAX_CACHED_REGIONS = 25;
 
     // Hydrology regions built for one pipeline, least recently used evicted first.
     // Each region is built once; everyone who needs it waits for that one build.
@@ -490,19 +491,6 @@ public final class RiverHydrology {
         return (((long) bits) << 32) | (index & 0xFFFFFFFFL);
     }
 
-    private static int[] orderBy(float[] key, int n) {
-        long[] packed = new long[n];
-        for (int i = 0; i < n; i++) {
-            packed[i] = pack(key[i], i);
-        }
-        Arrays.sort(packed);
-        int[] order = new int[n];
-        for (int i = 0; i < n; i++) {
-            order[i] = (int) packed[i];
-        }
-        return order;
-    }
-
     private static final class LongHeap {
         private long[] heap;
         private int size;
@@ -738,66 +726,98 @@ public final class RiverHydrology {
 
         for (int i = 0; i < n; i++) {
             int r = i / GRID, c = i % GRID;
-            if (sink[i] || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
-                closed[i] = true;
-                open.push(pack(filled[i], i));
+            closed[i] = sink[i] || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1;
+        }
+        int[] nr8 = {-1, -1, -1, 0, 0, 1, 1, 1}, nc8 = {-1, 0, 1, -1, 1, -1, 0, 1};
+        // The flood spreads from the sea and the window's edge, from just the cells of them beside open ground
+        for (int i = 0; i < n; i++) {
+            if (!closed[i]) continue;
+            int r = i / GRID, c = i % GRID;
+            for (int k = 0; k < 8; k++) {
+                int rr = r + nr8[k], cc = c + nc8[k];
+                if (rr >= 0 && cc >= 0 && rr < GRID && cc < GRID && !closed[rr * GRID + cc]) {
+                    open.push(pack(filled[i], i));
+                    break;
+                }
             }
         }
 
-        int[] nr4 = {-1, -1, -1, 0, 0, 1, 1, 1}, nc4 = {-1, 0, 1, -1, 1, -1, 0, 1};
-        while (!open.isEmpty()) {
-            int i = (int) open.pop();
+        // A cell no higher than the one it is reached from lies in a depression and fills to that level at once,
+        // so it is queued in arrival order instead of by height (Barnes, Lehman and Mulla 2014). A cell higher
+        // than every open neighbour is on a slope: those neighbours drain through it at their own height whenever
+        // it is reached, so slopes are climbed in arrival order too, and only a cell beside open ground no higher
+        // than itself waits its turn by height (Zhou, Sun and Fu 2016). Each cell is queued once, so the
+        // depression queue fills its array from the front and the slope queue from the back.
+        int[] queued = new int[n];
+        int pitHead = 0, pitTail = 0, slopeHead = n - 1, slopeTail = n - 1;
+        while (true) {
+            int i;
+            if (pitHead < pitTail) {
+                i = queued[pitHead++];
+            } else if (slopeHead > slopeTail) {
+                i = queued[slopeHead--];
+                if (spillsBeside(i, filled, closed)) {
+                    open.push(pack(filled[i], i));
+                    continue;
+                }
+            } else if (!open.isEmpty()) {
+                i = (int) open.pop();
+            } else {
+                break;
+            }
             int r = i / GRID, c = i % GRID;
             for (int k = 0; k < 8; k++) {
-                int rr = r + nr4[k], cc = c + nc4[k];
+                int rr = r + nr8[k], cc = c + nc8[k];
                 if (rr < 0 || cc < 0 || rr >= GRID || cc >= GRID) continue;
                 int j = rr * GRID + cc;
                 if (closed[j]) continue;
                 closed[j] = true;
-                filled[j] = Math.max(filled[j], filled[i]);
-                open.push(pack(filled[j], j));
+                if (filled[j] <= filled[i]) {
+                    filled[j] = filled[i];
+                    queued[pitTail++] = j;
+                } else {
+                    queued[slopeTail--] = j;
+                }
             }
         }
 
         InfiniteTensor.throwIfCancelled();
-        int[] nr8 = {-1, -1, -1, 0, 0, 1, 1, 1}, nc8 = {-1, 0, 1, -1, 1, -1, 0, 1};
-
         // Filling leaves every depression exactly level. A level cell with no lower neighbour finds its way off
         // by a lift compared only between cells of equal height: lower towards where the level drains and, half
         // as strongly, higher near the ground rising above it, so water gathers along the middle of a level
         // instead of running in parallel lines (Garbrecht and Martz 1997; Barnes, Lehman and Mulla 2014).
         // Distances are octile, so the lift has no square contours to channel water along the grid's axes.
         boolean[] flat = new boolean[n];
-        for (int i = 0; i < n; i++) {
-            int r = i / GRID, c = i % GRID;
-            if (sink[i] || r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
-                continue;
-            }
-            flat[i] = true;
-            for (int k = 0; k < 8; k++) {
-                if (filled[(r + nr8[k]) * GRID + (c + nc8[k])] < filled[i]) {
-                    flat[i] = false;
-                    break;
+        IntStream.range(1, GRID - 1).parallel().forEach(r -> {
+            for (int c = 1; c < GRID - 1; c++) {
+                int i = r * GRID + c;
+                if (sink[i]) continue;
+                flat[i] = true;
+                for (int k = 0; k < 8; k++) {
+                    if (filled[(r + nr8[k]) * GRID + (c + nc8[k])] < filled[i]) {
+                        flat[i] = false;
+                        break;
+                    }
                 }
             }
-        }
+        });
         float[] toOutlet = new float[n];
         float[] fromHigh = new float[n];
         Arrays.fill(toOutlet, -1f);
         Arrays.fill(fromHigh, -1f);
         LongHeap towardsLow = new LongHeap(n), awayFromHigh = new LongHeap(n);
+        // Flat cells lie inside the window's edge, so all their neighbours are in it
         for (int i = 0; i < n; i++) {
+            if (!flat[i]) continue;
             int r = i / GRID, c = i % GRID;
             for (int k = 0; k < 8; k++) {
-                int rr = r + nr8[k], cc = c + nc8[k];
-                if (rr < 0 || cc < 0 || rr >= GRID || cc >= GRID) continue;
-                int j = rr * GRID + cc;
+                int j = (r + nr8[k]) * GRID + (c + nc8[k]);
                 // A level drains through any equal cell that is not itself flat: a slope's top or an outlet
-                if (!flat[i] && flat[j] && filled[j] == filled[i] && toOutlet[i] < 0f) {
-                    toOutlet[i] = 0f;
-                    towardsLow.push(pack(0f, i));
+                if (!flat[j] && filled[j] == filled[i] && toOutlet[j] < 0f) {
+                    toOutlet[j] = 0f;
+                    towardsLow.push(pack(0f, j));
                 }
-                if (flat[i] && filled[j] > filled[i] && fromHigh[i] < 0f) {
+                if (filled[j] > filled[i] && fromHigh[i] < 0f) {
                     fromHigh[i] = 0f;
                     awayFromHigh.push(pack(0f, i));
                 }
@@ -823,68 +843,84 @@ public final class RiverHydrology {
             lift[i] = 2f * toOutlet[i] + away + n01;
         }
 
+        // Where each cell sends its water: down the steepest of its eight triangular facets, split between the
+        // facet's cardinal and diagonal neighbour by the angle of fall across it (Tarboton 1997)
         InfiniteTensor.throwIfCancelled();
-        int[] ascending = orderBy(filled, n);
-        breakTies(ascending, filled, lift);
-        InfiniteTensor.throwIfCancelled();
+        byte[] facet = new byte[n];
+        Arrays.fill(facet, (byte) -1);
+        float[] toDiagonalOf = new float[n];
+        final float QUADRANT = (float) (Math.PI / 4.0);
+        IntStream.range(1, GRID - 1).parallel().forEach(r -> {
+            for (int c = 1; c < GRID - 1; c++) {
+                int i = r * GRID + c;
+                if (sink[i]) {
+                    continue;
+                }
+                float bestSlope = 0f;
+                int bestFacet = -1;
+                float bestS1 = 0f, bestS2 = 0f;
+                int bestClamp = 0;
+                for (int f = 0; f < 8; f++) {
+                    int cardinal = (r + FACET_CR[f]) * GRID + (c + FACET_CC[f]);
+                    int diagonal = (r + FACET_DR[f]) * GRID + (c + FACET_DC[f]);
+                    float s1 = fall(filled, lift, flat[i], i, cardinal);
+                    float s2 = fall(filled, lift, flat[i], cardinal, diagonal);
+                    float mag;
+                    int clamp;
+                    if (s2 < 0f) {
+                        mag = s1;
+                        clamp = -1;
+                    } else if ((s1 <= 0f && !(s1 == 0f && s2 == 0f)) || s2 > s1) {
+                        mag = fall(filled, lift, flat[i], i, diagonal) / 1.41421f;
+                        clamp = 1;
+                    } else {
+                        mag = (float) Math.sqrt(s1 * s1 + s2 * s2);
+                        clamp = 0;
+                    }
+                    if (mag > bestSlope) {
+                        bestSlope = mag;
+                        bestFacet = f;
+                        bestS1 = s1;
+                        bestS2 = s2;
+                        bestClamp = clamp;
+                    }
+                }
+                if (bestFacet < 0) {
+                    continue;
+                }
+                float bestAngle = bestClamp < 0 ? 0f
+                        : bestClamp > 0 ? QUADRANT
+                        : (float) Math.atan2(bestS2, bestS1);
+                float toDiagonal = bestAngle / QUADRANT;
+                facet[i] = (byte) bestFacet;
+                toDiagonalOf[i] = toDiagonal;
+                downOut[i] = 1f - toDiagonal >= toDiagonal ? cardinalOf(i, bestFacet) : diagonalOf(i, bestFacet);
+            }
+        });
 
+        // Each cell passes its water on once every cell draining into it has. Water only runs downhill, so every
+        // cell is reached, in an order that needs no sorting of the window.
+        InfiniteTensor.throwIfCancelled();
+        int[] donors = new int[n];
+        for (int i = 0; i < n; i++) {
+            if (facet[i] < 0) continue;
+            if (toDiagonalOf[i] < 1f) donors[cardinalOf(i, facet[i])]++;
+            if (toDiagonalOf[i] > 0f) donors[diagonalOf(i, facet[i])]++;
+        }
+        int[] ready = new int[n];
+        int head = 0, tail = 0;
+        for (int i = 0; i < n; i++) {
+            if (donors[i] == 0) ready[tail++] = i;
+        }
         float[] acc = d.acc;
         for (int i = 0; i < n; i++) acc[i] = runoff[i] + inflow[i];
         float[] unmet = d.loss.clone();
-
-        final float QUADRANT = (float) (Math.PI / 4.0);
-        for (int oi = n - 1; oi >= 0; oi--) {
-            int i = ascending[oi];
-            if (sink[i]) {
-                continue;
-            }
-            int r = i / GRID, c = i % GRID;
-            if (r == 0 || c == 0 || r == GRID - 1 || c == GRID - 1) {
-                continue;
-            }
-
-            float bestSlope = 0f, bestAngle = 0f;
-            int bestCardinal = -1, bestDiagonal = -1;
-            float bestS1 = 0f, bestS2 = 0f;
-            int bestClamp = 0;
-            for (int f = 0; f < 8; f++) {
-                int cardinal = (r + FACET_CR[f]) * GRID + (c + FACET_CC[f]);
-                int diagonal = (r + FACET_DR[f]) * GRID + (c + FACET_DC[f]);
-                float s1 = fall(filled, lift, flat[i], i, cardinal);
-                float s2 = fall(filled, lift, flat[i], cardinal, diagonal);
-                float mag;
-                int clamp;
-                if (s2 < 0f) {
-                    mag = s1;
-                    clamp = -1;
-                } else if ((s1 <= 0f && !(s1 == 0f && s2 == 0f)) || s2 > s1) {
-                    mag = fall(filled, lift, flat[i], i, diagonal) / 1.41421f;
-                    clamp = 1;
-                } else {
-                    mag = (float) Math.sqrt(s1 * s1 + s2 * s2);
-                    clamp = 0;
-                }
-                if (mag > bestSlope) {
-                    bestSlope = mag;
-                    bestCardinal = cardinal;
-                    bestDiagonal = diagonal;
-                    bestS1 = s1;
-                    bestS2 = s2;
-                    bestClamp = clamp;
-                }
-            }
-            bestAngle = bestClamp < 0 ? 0f
-                    : bestClamp > 0 ? QUADRANT
-                    : (float) Math.atan2(bestS2, bestS1);
-
-            if (bestCardinal < 0 || bestSlope <= 0f) {
-                downOut[i] = -1;
-                continue;
-            }
-
-            float toDiagonal = bestAngle / QUADRANT;
+        while (head < tail) {
+            int i = ready[head++];
+            if (facet[i] < 0) continue;
+            int cardinal = cardinalOf(i, facet[i]), diagonal = diagonalOf(i, facet[i]);
+            float toDiagonal = toDiagonalOf[i];
             float toCardinal = 1f - toDiagonal;
-            downOut[i] = toCardinal >= toDiagonal ? bestCardinal : bestDiagonal;
             int b = d.basin[i];
             if (b >= 0 && d.basin[downOut[i]] != b) {
                 d.inflow[b] += acc[i];
@@ -897,9 +933,14 @@ public final class RiverHydrology {
             if (b >= 0 || acc[i] >= STREAM_CELLS) {
                 acc[downOut[i]] += acc[i];
             } else {
-                acc[bestCardinal] += acc[i] * toCardinal;
-                acc[bestDiagonal] += acc[i] * toDiagonal;
+                acc[cardinal] += acc[i] * toCardinal;
+                acc[diagonal] += acc[i] * toDiagonal;
             }
+            if (toDiagonal < 1f && --donors[cardinal] == 0) ready[tail++] = cardinal;
+            if (toDiagonal > 0f && --donors[diagonal] == 0) ready[tail++] = diagonal;
+        }
+        if (tail != n) {
+            throw new IllegalStateException("Drainage has a cycle: " + (n - tail) + " cells never drained");
         }
         InfiniteTensor.throwIfCancelled();
         for (int i = 0; i < n; i++) d.fillDepth[i] = filled[i] - elev[i];
@@ -1075,25 +1116,31 @@ public final class RiverHydrology {
         return inflow;
     }
 
+    // Whether an open neighbour of a cell is no higher than it, so would fill from it
+    private static boolean spillsBeside(int i, float[] filled, boolean[] closed) {
+        int r = i / GRID, c = i % GRID;
+        for (int rr = Math.max(0, r - 1); rr <= Math.min(GRID - 1, r + 1); rr++) {
+            for (int cc = Math.max(0, c - 1); cc <= Math.min(GRID - 1, c + 1); cc++) {
+                int j = rr * GRID + cc;
+                if (!closed[j] && filled[j] <= filled[i]) return true;
+            }
+        }
+        return false;
+    }
+
+    // The cardinal and diagonal neighbour of a cell that bound one of its eight facets
+    private static int cardinalOf(int i, int f) {
+        return i + FACET_CR[f] * GRID + FACET_CC[f];
+    }
+
+    private static int diagonalOf(int i, int f) {
+        return i + FACET_DR[f] * GRID + FACET_DC[f];
+    }
+
     // How far water falls from cell a to cell b, as seen from a flat cell or not: across a level only the
     // lift tells cells apart
     private static float fall(float[] filled, float[] lift, boolean fromFlat, int a, int b) {
         return fromFlat && filled[a] == filled[b] ? lift[a] - lift[b] : filled[a] - filled[b];
-    }
-
-    // Orders cells of equal height by lift, so each level is visited from its high side down
-    private static void breakTies(int[] order, float[] filled, float[] lift) {
-        for (int start = 0; start < order.length; ) {
-            int end = start + 1;
-            while (end < order.length && filled[order[end]] == filled[order[start]]) end++;
-            if (end - start > 1) {
-                long[] run = new long[end - start];
-                for (int k = start; k < end; k++) run[k - start] = pack(lift[order[k]], order[k]);
-                Arrays.sort(run);
-                for (int k = start; k < end; k++) order[k] = (int) run[k - start];
-            }
-            start = end;
-        }
     }
 
     // Octile distance across a level's flat cells from the cells queued in open, which hold distance 0
