@@ -1,5 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
+import com.github.xandergos.terraindiffusionmc.pipeline.BlockWater;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import net.minecraft.world.level.dimension.DimensionType;
 import net.minecraft.world.level.levelgen.DensityFunction;
@@ -31,10 +32,16 @@ public final class TerrainGenerationBounds {
                 // Avoid the density function's integer-subtraction overflow for exotic scales/models.
                 if (ground < DimensionType.MIN_Y || ground > DimensionType.MAX_Y) return Long.MAX_VALUE;
                 highest = Math.max(highest, ground);
+                int water = ground < seaLevel ? seaLevel : Integer.MIN_VALUE;
                 if (data.waterLevel != null && data.waterLevel[z][x] != HeightmapData.NO_WATER) {
-                    int water = HeightConverter.convertToMinecraftHeight(data.waterLevel[z][x], scale);
+                    water = HeightConverter.convertToMinecraftHeight(data.waterLevel[z][x], scale);
                     if (water < DimensionType.MIN_Y || water > DimensionType.MAX_Y) return Long.MAX_VALUE;
                     highest = Math.max(highest, water);
+                }
+                // A curtain falls from up to its height above the water below it
+                int flow = data.waterFlow[z * data.width + x] & 0xff;
+                if (flow >= BlockWater.CURTAIN && water != Integer.MIN_VALUE) {
+                    highest = Math.max(highest, water + flow - BlockWater.CURTAIN - 1);
                 }
             }
         }

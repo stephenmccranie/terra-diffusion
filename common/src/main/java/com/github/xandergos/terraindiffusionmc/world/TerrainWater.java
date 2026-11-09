@@ -1,15 +1,16 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
+import com.github.xandergos.terraindiffusionmc.pipeline.BlockWater;
 import com.github.xandergos.terraindiffusionmc.pipeline.DeepCaverns;
 import com.github.xandergos.terraindiffusionmc.pipeline.KarstNetwork;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.tags.FluidTags;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.LiquidBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.dimension.DimensionType;
@@ -149,6 +150,17 @@ public final class TerrainWater {
         return HeightConverter.convertToMinecraftHeight(meters);
     }
 
+    // How the column's top water moves: 0 still, a ramp level up to BlockWater.MAX_RAMP, or BlockWater.CURTAIN plus
+    // the height of a fall
+    public static int waterFlow(int x, int z) {
+        HeightmapData data = tileFor(x, z);
+        if (data == null) return 0;
+        int localX = x - tileStart(x);
+        int localZ = z - tileStart(z);
+        if (localX < 0 || localZ < 0 || localX >= data.width || localZ >= data.height) return 0;
+        return data.waterFlow[localZ * data.width + localX] & 0xff;
+    }
+
     public static int groundY(int x, int z) {
         HeightmapData data = tileFor(x, z);
         if (data == null || data.heightmap == null) {
@@ -283,6 +295,15 @@ public final class TerrainWater {
         Aquifer.FluidStatus stream = new Aquifer.FluidStatus(Integer.MAX_VALUE / 2, fluid);
         Aquifer.FluidStatus lava =
                 new Aquifer.FluidStatus(Integer.MAX_VALUE / 2, Blocks.LAVA.defaultBlockState());
+        // A ramp's flowing water at each level, and a curtain's falling water
+        boolean levelled = fluid.hasProperty(LiquidBlock.LEVEL);
+        Aquifer.FluidStatus[] flowing = new Aquifer.FluidStatus[BlockWater.MAX_RAMP + 1];
+        for (int k = 1; k <= BlockWater.MAX_RAMP; k++) {
+            flowing[k] = new Aquifer.FluidStatus(Integer.MAX_VALUE / 2,
+                    levelled ? fluid.setValue(LiquidBlock.LEVEL, k) : fluid);
+        }
+        Aquifer.FluidStatus falling = new Aquifer.FluidStatus(Integer.MAX_VALUE / 2,
+                levelled ? fluid.setValue(LiquidBlock.LEVEL, 8) : fluid);
         ThreadLocal<PickerColumns> columns = ThreadLocal.withInitial(PickerColumns::new);
 
         return (x, y, z) -> {
@@ -297,6 +318,8 @@ public final class TerrainWater {
                 p.status[s] = level == NO_WATER
                         ? ocean
                         : new Aquifer.FluidStatus(level, fluid);
+                p.flow[s] = waterFlow(x, z);
+                p.top[s] = level != NO_WATER ? level : ground != NO_GROUND && ground < seaLevel ? seaLevel : NO_WATER;
                 p.streamTop[s] = (int) (band >> 32);
                 p.streamBottom[s] = (int) band;
                 p.x[s] = x;
@@ -306,6 +329,15 @@ public final class TerrainWater {
 
             int ground = p.ground[s];
             if (ground == NO_GROUND || y >= ground) {
+                int flow = p.flow[s], top = p.top[s];
+                if (flow != 0 && top != NO_WATER && y >= top) {
+                    if (flow <= BlockWater.MAX_RAMP) {
+                        if (y == top) return flowing[flow];
+                    } else {
+                        int fall = flow - BlockWater.CURTAIN;
+                        if (y < top + fall) return y == top + fall - 1 ? flowing[1] : falling;
+                    }
+                }
                 return p.status[s];
             }
             if (y <= DeepCaverns.LAVA_Y) {
@@ -327,32 +359,18 @@ public final class TerrainWater {
     }
 
     /**
-     * Water is filled without fluid updates, so it stood still wherever it met open air: where a river's surface steps
-     * down a block or falls, its top water stood beside air and a boat paddling upstream sank into it, and where a
-     * river or lake runs over a cave, its water hung over the cave as a ceiling. Whenever a chunk starts ticking, that
-     * water spills, as it would after any block update: top water standing beside open air above lower water makes a
-     * step a short rapid of flowing water a boat can climb and a fall a waterfall, and the lowest water hanging over air
-     * pours down into the cave. It reads only placed blocks, so it mends chunks generated before it, and once spilled a
-     * chunk has nothing left to do.
+     * Water is filled without fluid updates, so where a river or lake runs over a cave its water hangs over the cave as
+     * a ceiling. Whenever a chunk starts ticking, the lowest water hanging over air pours down into the cave, as it
+     * would after any block update. It reads only placed blocks, and once spilled a chunk has nothing left to do.
      */
-    public static void spillStillWater(LevelChunk chunk) {
+    public static void spillIntoCaves(LevelChunk chunk) {
         Level level = chunk.getLevel();
         BlockPos.MutableBlockPos top = new BlockPos.MutableBlockPos();
-        BlockPos.MutableBlockPos side = new BlockPos.MutableBlockPos();
         for (int lx = 0; lx < 16; lx++) {
             for (int lz = 0; lz < 16; lz++) {
                 top.set(chunk.getPos().getBlockX(lx), chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, lx, lz),
                         chunk.getPos().getBlockZ(lz));
-                FluidState water = chunk.getFluidState(top);
-                if (!water.is(Fluids.WATER)) continue;
-                for (Direction d : Direction.Plane.HORIZONTAL) {
-                    // A ticking chunk's neighbours are loaded, so looking one block across its edge loads nothing
-                    side.setWithOffset(top, d);
-                    if (level.getBlockState(side).isAir() && waterBelow(level, side)) {
-                        water.tick(level, top);
-                        break;
-                    }
-                }
+                if (!chunk.getFluidState(top).is(Fluids.WATER)) continue;
                 spillIntoCave(chunk, level, top, chunk.getHeight(Heightmap.Types.OCEAN_FLOOR, lx, lz));
             }
         }
@@ -374,15 +392,6 @@ public final class TerrainWater {
         }
     }
 
-    // Whether the first block under the open air at pos holds water
-    private static boolean waterBelow(Level level, BlockPos.MutableBlockPos pos) {
-        while (pos.getY() > level.getMinBuildHeight()) {
-            BlockState below = level.getBlockState(pos.move(Direction.DOWN));
-            if (!below.isAir()) return below.getFluidState().is(FluidTags.WATER);
-        }
-        return false;
-    }
-
     private static final class PickerColumns {
         final int[] x = new int[SLOTS];
         final int[] z = new int[SLOTS];
@@ -390,6 +399,8 @@ public final class TerrainWater {
         final int[] ground = new int[SLOTS];
         final int[] streamTop = new int[SLOTS];
         final int[] streamBottom = new int[SLOTS];
+        final int[] flow = new int[SLOTS];
+        final int[] top = new int[SLOTS];
         final Aquifer.FluidStatus[] status = new Aquifer.FluidStatus[SLOTS];
 
         PickerColumns() {
