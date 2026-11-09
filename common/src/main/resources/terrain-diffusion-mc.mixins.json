@@ -8,6 +8,7 @@
     "BeardifierAccessor",
     "BiomeMixin",
     "ChunkGeneratorStructureStateMixin",
+    "DiskFeatureMixin",
     "HeightRangePlacementMixin",
     "HolderReferenceAccessor",
     "LevelChunkSpillMixin",
