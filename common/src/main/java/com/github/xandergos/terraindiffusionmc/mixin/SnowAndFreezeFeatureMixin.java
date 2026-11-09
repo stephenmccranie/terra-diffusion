@@ -147,6 +147,10 @@ public abstract class SnowAndFreezeFeatureMixin {
             if (here.isAir() || here.is(BlockTags.LEAVES) || here.is(BlockTags.LOGS)) {
                 continue;
             }
+            // Snow does not settle on water or lava under a canopy
+            if (!here.getFluidState().isEmpty()) {
+                return;
+            }
 
             BlockPos target = cursor.above();
             if (!level.getBlockState(target).isAir()) {

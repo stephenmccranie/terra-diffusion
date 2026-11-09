@@ -356,6 +356,7 @@ public final class LocalTerrainProvider {
         short[] biomes = BiomeClassifier.classify(crop(smooth, 0, W, HALO, HALO, tH, tW), tileClimate, ti1, tj1,
                 crop(smooth, 0, W, HALO - 1, HALO - 1, tH + 2, tW + 2), tH, tW, blockM, snow,
                 riverMask(crop(carved[1], 0, W, HALO, HALO, tH, tW)));
+        BiomeClassifier.easeSnowNearWater(snow, carved[1], carved[0], H, W, HALO, tH, tW);
         return buildHeightmapData(carved[0], carved[1], climate, biomes, snow, H, W, tH, tW, blockM, scale);
     }
 

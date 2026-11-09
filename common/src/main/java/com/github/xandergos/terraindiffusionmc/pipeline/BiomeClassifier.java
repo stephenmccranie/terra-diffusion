@@ -320,6 +320,58 @@ public final class BiomeClassifier {
         return (byte) Math.min(MAX_SNOW_DEPTH, depth);
     }
 
+    // Snow thins toward open water and the sea: within EASE_REACH_BLOCKS of it a column holds at most
+    // EASE_LAYERS_PER_BLOCK layers per block of distance
+    private static final int EASE_REACH_BLOCKS = 8;
+    private static final float EASE_LAYERS_PER_BLOCK = 2f;
+
+    // Caps the snow of the tH x tW tile at the centre of an H x W block grid by each column's distance to water
+    // or below-sea ground; the grid's halo must be at least EASE_REACH_BLOCKS, so every cap depends only on the
+    // column's position
+    static void easeSnowNearWater(byte[] snow, float[] water, float[] bed, int H, int W, int halo, int tH, int tW) {
+        int n = H * W;
+        float[] dist = new float[n];
+        for (int i = 0; i < n; i++) {
+            dist[i] = water[i] > WaterNetwork.NO_WATER || bed[i] < 0f ? 0f : Float.MAX_VALUE;
+        }
+        float diag = (float) Math.sqrt(2.0);
+        for (int r = 0; r < H; r++) {
+            for (int c = 0; c < W; c++) {
+                int i = r * W + c;
+                float d = dist[i];
+                if (c > 0) d = Math.min(d, dist[i - 1] + 1f);
+                if (r > 0) {
+                    d = Math.min(d, dist[i - W] + 1f);
+                    if (c > 0) d = Math.min(d, dist[i - W - 1] + diag);
+                    if (c < W - 1) d = Math.min(d, dist[i - W + 1] + diag);
+                }
+                dist[i] = d;
+            }
+        }
+        for (int r = H - 1; r >= 0; r--) {
+            for (int c = W - 1; c >= 0; c--) {
+                int i = r * W + c;
+                float d = dist[i];
+                if (c < W - 1) d = Math.min(d, dist[i + 1] + 1f);
+                if (r < H - 1) {
+                    d = Math.min(d, dist[i + W] + 1f);
+                    if (c < W - 1) d = Math.min(d, dist[i + W + 1] + diag);
+                    if (c > 0) d = Math.min(d, dist[i + W - 1] + diag);
+                }
+                dist[i] = d;
+            }
+        }
+        for (int r = 0; r < tH; r++) {
+            for (int c = 0; c < tW; c++) {
+                float d = dist[(r + halo) * W + c + halo];
+                if (d <= 0f || d >= EASE_REACH_BLOCKS) continue;
+                int t = r * tW + c;
+                int cap = Math.max(1, Math.round(EASE_LAYERS_PER_BLOCK * d));
+                if (snow[t] > cap) snow[t] = (byte) cap;
+            }
+        }
+    }
+
     private static final float MIN_LAPSE = 0.003f;
 
     private static final float FROST_NOISE = 0.3f;

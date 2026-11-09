@@ -41,6 +41,7 @@ public final class TerrainWater {
     private static final class TileRef {
         int startX = Integer.MIN_VALUE;
         int startZ = Integer.MIN_VALUE;
+        int generation = -1;
         HeightmapData data;
     }
 
@@ -114,9 +115,11 @@ public final class TerrainWater {
         int startZ = (z >> tileShift) << tileShift;
 
         TileRef ref = LAST.get();
-        if (ref.startX != startX || ref.startZ != startZ) {
+        int generation = LocalTerrainProvider.generation();
+        if (ref.startX != startX || ref.startZ != startZ || ref.generation != generation) {
             ref.startX = startX;
             ref.startZ = startZ;
+            ref.generation = generation;
             ref.data = LocalTerrainProvider.getInstance().fetchHeightmap(
                     startZ, startX, startZ + tileSize, startX + tileSize);
         }
