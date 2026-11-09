@@ -1,12 +1,14 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
+import com.github.xandergos.terraindiffusionmc.TerrainDiffusionLifecycle;
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
+import com.github.xandergos.terraindiffusionmc.mixin.HolderReferenceAccessor;
 import com.github.xandergos.terraindiffusionmc.mixin.NoiseBasedChunkGeneratorAccessor;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithCompat;
 import net.minecraft.core.Holder;
 import net.minecraft.core.registries.Registries;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.chunk.ChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 import net.minecraft.world.level.levelgen.SurfaceRules;
@@ -16,32 +18,33 @@ import org.slf4j.LoggerFactory;
 public final class TerralithSurfaceRules {
     private static final Logger LOG = LoggerFactory.getLogger(TerralithSurfaceRules.class);
 
+    private static final ResourceKey<NoiseGeneratorSettings> SETTINGS =
+            ResourceKey.create(Registries.NOISE_SETTINGS, TerrainDiffusionLifecycle.TERRAIN_DIFFUSION_ID);
+
     private static NoiseGeneratorSettings splicedInto;
 
     private TerralithSurfaceRules() {
     }
 
+    // The terrain-diffusion overworld refers to the registered settings, and the splice is bound into that registry
+    // entry, so a save stores only their id and every start splices the mod's own settings once
+    @SuppressWarnings("unchecked")
     public static void apply(ServerLevel overworld) {
-        ChunkGenerator generator = overworld.getChunkSource().getGenerator();
+        if (!(overworld.getChunkSource().getGenerator() instanceof NoiseBasedChunkGenerator generator)
+                || !(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource source)) {
+            return;
+        }
+        source.possibleBiomes();
+        var registry = overworld.registryAccess().registryOrThrow(Registries.NOISE_SETTINGS);
+        Holder.Reference<NoiseGeneratorSettings> settings = registry.getHolderOrThrow(SETTINGS);
+        ((NoiseBasedChunkGeneratorAccessor) (Object) generator).terrainDiffusion$setSettings(settings);
 
-        generator.getBiomeSource().possibleBiomes();
-
-        if (!TerralithCompat.isActive() || !TerrainDiffusionConfig.terralithInjectSurfaceRules()) {
+        NoiseGeneratorSettings current = settings.value();
+        if (current == splicedInto || !TerralithCompat.isActive() || !TerrainDiffusionConfig.terralithInjectSurfaceRules()) {
             return;
         }
 
-        if (!(generator instanceof NoiseBasedChunkGenerator noiseGenerator)) {
-            return;
-        }
-
-        NoiseGeneratorSettings current = noiseGenerator.generatorSettings().value();
-        if (current == splicedInto) {
-            return;
-        }
-
-        SurfaceRules.RuleSource terralithRule = overworld.registryAccess()
-                .registryOrThrow(Registries.NOISE_SETTINGS)
-                .getOptional(NoiseGeneratorSettings.OVERWORLD)
+        SurfaceRules.RuleSource terralithRule = registry.getOptional(NoiseGeneratorSettings.OVERWORLD)
                 .map(NoiseGeneratorSettings::surfaceRule)
                 .orElse(null);
 
@@ -64,8 +67,7 @@ public final class TerralithSurfaceRules {
                 current.useLegacyRandomSource()
         );
 
-        ((NoiseBasedChunkGeneratorAccessor) (Object) noiseGenerator)
-                .terrainDiffusion$setSettings(Holder.direct(merged));
+        ((HolderReferenceAccessor<NoiseGeneratorSettings>) settings).terrainDiffusion$bindValue(merged);
         splicedInto = merged;
         LOG.info("Applied Terralith surface rules to the terrain-diffusion overworld");
     }
