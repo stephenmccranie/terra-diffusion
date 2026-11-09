@@ -12,9 +12,11 @@
     "HolderReferenceAccessor",
     "LevelChunkSpillMixin",
     "MinecraftServerMixin",
+    "MonumentBuildingMixin",
     "NoiseBasedChunkGeneratorAccessor",
     "NoiseBasedChunkGeneratorFillMixin",
     "NoiseBasedChunkGeneratorFluidMixin",
+    "OceanMonumentStructureMixin",
     "SnowAndFreezeFeatureMixin",
     "StructureMixin"
   ],

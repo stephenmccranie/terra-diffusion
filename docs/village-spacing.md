@@ -22,8 +22,8 @@ new grid. Returning to `auto` preserves the explicitly saved choice.
 
 ## Datapacks
 
-The `terrain-diffusion-mc:scale_with_terrain` structure-set tag includes vanilla villages
-and optional Terralith rare villages. Datapacks can extend or replace it. Only standard
+The `terrain-diffusion-mc:scale_with_terrain` structure-set tag includes vanilla villages,
+ocean monuments and optional Terralith rare villages. Datapacks can extend or replace it. Only standard
 random-spread placements are scaled; custom placement subclasses and stronghold rings
 retain their definitions. Custom grids are capped at the codec's 4096-chunk spacing
 limit, preserving the separation ratio. Generation, locate and exclusion queries share
