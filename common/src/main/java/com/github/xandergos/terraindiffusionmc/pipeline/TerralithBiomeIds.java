@@ -22,11 +22,7 @@ public final class TerralithBiomeIds {
     public static final short AMETHYST_CANYON = 220;
     public static final short GLACIAL_CHASM = 221;
 
-    public static final short VOLCANIC_PEAKS = 230;
-    public static final short VOLCANIC_CRATER = 231;
-    public static final short CALDERA = 232;
     public static final short EMERALD_PEAKS = 233;
-    public static final short SCARLET_MOUNTAINS = 234;
     public static final short ROCKY_MOUNTAINS = 235;
     public static final short PAINTED_MOUNTAINS = 236;
     public static final short HAZE_MOUNTAIN = 237;
@@ -112,11 +108,7 @@ public final class TerralithBiomeIds {
         paths.put(AMETHYST_CANYON, "amethyst_canyon");
         paths.put(GLACIAL_CHASM, "glacial_chasm");
 
-        paths.put(VOLCANIC_PEAKS, "volcanic_peaks");
-        paths.put(VOLCANIC_CRATER, "volcanic_crater");
-        paths.put(CALDERA, "caldera");
         paths.put(EMERALD_PEAKS, "emerald_peaks");
-        paths.put(SCARLET_MOUNTAINS, "scarlet_mountains");
         paths.put(ROCKY_MOUNTAINS, "rocky_mountains");
         paths.put(PAINTED_MOUNTAINS, "painted_mountains");
         paths.put(HAZE_MOUNTAIN, "haze_mountain");

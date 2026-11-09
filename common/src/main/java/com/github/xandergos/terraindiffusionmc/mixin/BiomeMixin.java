@@ -1,6 +1,5 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
-import com.github.xandergos.terraindiffusionmc.world.SnowFreeBiomes;
 import net.minecraft.core.BlockPos;
 import net.minecraft.world.level.biome.Biome;
 import org.spongepowered.asm.mixin.Mixin;
@@ -19,7 +18,7 @@ public abstract class BiomeMixin {
 
     @Inject(method = "warmEnoughToRain", at = @At("HEAD"), cancellable = true)
     private void terrainDiffusion$ignoreAltitudeForSnow(BlockPos pos, CallbackInfoReturnable<Boolean> cir) {
-        if (this.getBaseTemperature() >= 0.15F || SnowFreeBiomes.contains((Biome) (Object) this)) {
+        if (this.getBaseTemperature() >= 0.15F) {
             cir.setReturnValue(true);
         }
     }
@@ -32,7 +31,7 @@ public abstract class BiomeMixin {
         }
 
         // Base temperature >= 0.15 means this is NOT a snowy biome
-        if (this.getBaseTemperature() >= 0.15F || SnowFreeBiomes.contains((Biome) (Object) this)) {
+        if (this.getBaseTemperature() >= 0.15F) {
             cir.setReturnValue(Biome.Precipitation.RAIN);
         }
         // For snowy biomes (base temp < 0.15), let vanilla handle it

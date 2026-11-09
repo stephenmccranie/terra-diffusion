@@ -71,25 +71,54 @@ public final class BiomeClassifier {
     static final short PLAINS = 1, RIVER = 7, FROZEN_RIVER = 11;
     static final short SNOWY_PLAINS = 3, DESERT = 5, SWAMP = 6;
     static final short FOREST = 8, TAIGA = 15, SNOWY_TAIGA = 16, SAVANNA = 17;
-    static final short WINDSWEPT_HILLS = 19, JUNGLE = 23, BADLANDS = 26, MEADOW = 29;
+    static final short WINDSWEPT_HILLS = 19, JUNGLE = 23, BADLANDS = 26, WOODED_BADLANDS = 27, ERODED_BADLANDS = 28, MEADOW = 29;
     static final short GROVE = 31, SNOWY_SLOPES = 32, FROZEN_PEAKS = 33, STONY_PEAKS = 35;
     static final short WARM_OCEAN = 41, OCEAN = 44, COLD_OCEAN = 46, FROZEN_OCEAN = 48;
+    static final short BEACH = 38, SNOWY_BEACH = 39, STONY_SHORE = 40;
+    static final short LUKEWARM_OCEAN = 42, DEEP_LUKEWARM_OCEAN = 43, DEEP_OCEAN = 45, DEEP_COLD_OCEAN = 47, DEEP_FROZEN_OCEAN = 49;
     static final short FOREST_SPARSE = 108, TAIGA_SPARSE = 115, SNOWY_TAIGA_SPARSE = 116;
 
+    // Native pixels the land's shape is averaged over: what reads as a slope, a rise or a shore
+    public static final int LANDFORM_RADIUS = 6;
+
+    // Native pixels a box is read beyond what it uses, so the averages stay four pixels clear of its edge,
+    // whose values depend on the box
+    public static final int LANDFORM_MARGIN = LANDFORM_RADIUS + 4;
+
+    // The land's shape at a grid's pixels: world height averaged over LANDFORM_RADIUS with a one-pixel border,
+    // how far the world raised the ground on the same average, and the share of sea within that reach
+    public record Landform(float[] heightPadded, float[] raise, float[] sea) {}
+
+    // {height, raise, sea share} averaged over LANDFORM_RADIUS on an h x w grid of native pixels
+    public static float[][] landform(float[] world, float[] raise, int h, int w) {
+        float[] sea = new float[h * w];
+        for (int i = 0; i < sea.length; i++) sea[i] = world[i] < 0f ? 1f : 0f;
+        return new float[][]{boxBlur(world, h, w), boxBlur(raise, h, w), boxBlur(sea, h, w)};
+    }
+
+    private static float[] boxBlur(float[] src, int h, int w) {
+        int radius = LANDFORM_RADIUS;
+        float[] rows = new float[h * w], out = new float[h * w];
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < w; c++) {
+                float sum = 0f;
+                for (int k = -radius; k <= radius; k++) sum += src[r * w + Math.max(0, Math.min(w - 1, c + k))];
+                rows[r * w + c] = sum / (2 * radius + 1);
+            }
+        }
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < w; c++) {
+                float sum = 0f;
+                for (int k = -radius; k <= radius; k++) sum += rows[Math.max(0, Math.min(h - 1, r + k)) * w + c];
+                out[r * w + c] = sum / (2 * radius + 1);
+            }
+        }
+        return out;
+    }
+
     // Classify biomes for a grid of pixels
-    public static short[] classify(float[] elev, float[] climate, int i0, int j0,
-                                    float[] elevPadded, int H, int W, float pixelSizeM) {
-        return classify(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, null, null);
-    }
-
-    public static short[] classify(float[] elev, float[] climate, int i0, int j0,
-                                    float[] elevPadded, int H, int W, float pixelSizeM,
-                                    byte[] snowLayersOut, boolean[] riverMask) {
-        return classify(elev, climate, i0, j0, 1, elevPadded, H, W, pixelSizeM, snowLayersOut, riverMask);
-    }
-
     public static short[] classify(float[] elev, float[] climate, int i0, int j0, int coordStep,
-                                    float[] elevPadded, int H, int W, float pixelSizeM,
+                                    float[] elevPadded, Landform land, int H, int W, float pixelSizeM,
                                     byte[] snowLayersOut, boolean[] riverMask) {
         if (climate.length != CLIMATE_CHANNELS * H * W) {
             throw new IllegalArgumentException("climate needs " + CLIMATE_CHANNELS + " channels of " + H + "x" + W);
@@ -120,6 +149,7 @@ public final class BiomeClassifier {
 
         // Compute slope from padded elevation using Sobel (divide by pixelSizeM for ratio)
         float[] slopeRatio = computeSlopeRatio(elevPadded, H, W, pixelSizeM);
+        float[] landSlope = computeSlopeRatio(land.heightPadded(), H, W, pixelSizeM);
 
         // Process per-pixel
         TerrainSample sample = new TerrainSample();
@@ -145,9 +175,15 @@ public final class BiomeClassifier {
                 float seasonPenalty = 1f - 0.35f * Math.min(1f, pCV / 100f);
                 float treeMoisture = aridity * seasonPenalty;
 
-                float lapse = Math.max(MIN_LAPSE, -climate[4 * H * W + idx]);
+                float lapseRate = -climate[4 * H * W + idx];
+                float lapse = Math.max(MIN_LAPSE, lapseRate);
                 float tReg = climate[5 * H * W + idx] + tempNoise[idx];
-                float relElev = (tReg - temp) / lapse;
+                // Zones and rises follow the land's shape: the model's height of the averaged surface, against
+                // the model's height here
+                float modelAlt = Math.max(0f, elevVal - climate[6 * H * W + idx]);
+                float landAlt = Math.max(0f, land.heightPadded()[(r + 1) * (W + 2) + c + 1] - land.raise()[idx]);
+                float zoneTemp = temp + (modelAlt - landAlt) * lapseRate;
+                float relElev = (tReg - zoneTemp) / lapse;
                 float moist = precip / potentialEvaporation(tReg, tStd) * seasonPenalty;
                 // Trees, snow and ice feel the air of their ground as the world raised it; climate keeps the
                 // model's height
@@ -220,8 +256,10 @@ public final class BiomeClassifier {
                 sample.worldZ = i0 + r * coordStep;
                 sample.elev = elevVal;
                 sample.altM = altM;
-                sample.slope = slope;
+                sample.slope = landSlope[idx];
+                sample.seaShare = land.sea()[idx];
                 sample.temp = temp;
+                sample.zoneTemp = zoneTemp;
                 sample.airC = airC;
                 sample.tReg = tReg;
                 sample.relElev = relElev;
@@ -395,10 +433,11 @@ public final class BiomeClassifier {
         short biome = PLAINS;
 
         if (s.isOcean) {
-            if (s.frozen) biome = FROZEN_OCEAN;
-            else if (s.cold) biome = COLD_OCEAN;
-            else if (s.warm || s.hot) biome = WARM_OCEAN;
-            else biome = OCEAN;
+            boolean deep = TerralithClassifier.deepSea(s);
+            if (s.frozen) biome = deep ? DEEP_FROZEN_OCEAN : FROZEN_OCEAN;
+            else if (s.cold) biome = deep ? DEEP_COLD_OCEAN : COLD_OCEAN;
+            else if (s.warm || s.hot) biome = deep ? DEEP_LUKEWARM_OCEAN : WARM_OCEAN;
+            else biome = deep ? DEEP_OCEAN : OCEAN;
         } else if (s.mountains) {
             if (s.slopeBare) {
                 if (frozenSurface(s)) biome = FROZEN_PEAKS;

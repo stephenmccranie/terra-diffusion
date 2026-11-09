@@ -336,12 +336,16 @@ public final class LocalTerrainProvider {
         int i1n = Math.floorDiv(i1, scale) - 2, j1n = Math.floorDiv(j1, scale) - 2;
         int i2n = -Math.floorDiv(-i2, scale) + 2, j2n = -Math.floorDiv(-j2, scale) + 2;
         int nH = i2n - i1n, nW = j2n - j1n, upH = nH * scale, upW = nW * scale;
-        float[][] out = pipeline.get(i1n, j1n, i2n, j2n, true);
-        float[][] elevUp = LaplacianUtils.bilinearResize(to2D(out[0], nH, nW), upH, upW);
+        int m = BiomeClassifier.LANDFORM_MARGIN, wH = nH + 2 * m, wW = nW + 2 * m;
+        float[][] wide = pipeline.get(i1n - m, j1n - m, i2n + m, j2n + m, true);
+        float[] heights = crop(wide[0], 0, wW, m, m, nH, nW);
+        float[] nativeClimate = cropChannels(wide[1], wH, wW, m, nH, nW);
+        float[][] land = BiomeClassifier.landform(wide[0], channel(wide[1], 6, wH * wW), wH, wW);
+        float[][] elevUp = LaplacianUtils.bilinearResize(to2D(heights, nH, nW), upH, upW);
         int cropI = i1 - i1n * scale, cropJ = j1 - j1n * scale;
         float[] smooth = cropFlat(elevUp, cropI, cropJ, H, W, upH, upW);
         float[] smoothPadded = cropFlat(elevUp, cropI - 1, cropJ - 1, H + 2, W + 2, upH, upW);
-        float[] climate = upsampleClimate(out[1], nH, nW, cropI, cropJ, H, W, scale, upH, upW);
+        float[] climate = upsampleClimate(nativeClimate, nH, nW, cropI, cropJ, H, W, scale, upH, upW);
         // At native resolution there is nothing between pixels to fill with detail
         float[] ground = scale > 1 ? addElevationNoise(smooth, smoothPadded, i1, j1, H, W, blockM) : smooth;
         float[][] carved = carveWater(ground, smooth, i1, j1, H, W, blockM, scale, 1);
@@ -352,12 +356,43 @@ public final class LocalTerrainProvider {
         for (int ch = 0; ch < channels; ch++) {
             System.arraycopy(crop(climate, ch * H * W, W, HALO, HALO, tH, tW), 0, tileClimate, ch * tH * tW, tH * tW);
         }
+        int ti = cropI + HALO, tj = cropJ + HALO;
+        var landform = new BiomeClassifier.Landform(
+                upsampled(land[0], wH, wW, m, nH, nW, scale, ti - 1, tj - 1, tH + 2, tW + 2),
+                upsampled(land[1], wH, wW, m, nH, nW, scale, ti, tj, tH, tW),
+                upsampled(land[2], wH, wW, m, nH, nW, scale, ti, tj, tH, tW));
         byte[] snow = new byte[tH * tW];
-        short[] biomes = BiomeClassifier.classify(crop(smooth, 0, W, HALO, HALO, tH, tW), tileClimate, ti1, tj1,
-                crop(smooth, 0, W, HALO - 1, HALO - 1, tH + 2, tW + 2), tH, tW, blockM, snow,
+        short[] biomes = BiomeClassifier.classify(crop(smooth, 0, W, HALO, HALO, tH, tW), tileClimate, ti1, tj1, 1,
+                crop(smooth, 0, W, HALO - 1, HALO - 1, tH + 2, tW + 2), landform, tH, tW, blockM, snow,
                 riverMask(crop(carved[1], 0, W, HALO, HALO, tH, tW)));
         BiomeClassifier.easeSnowNearWater(snow, carved[1], carved[0], H, W, HALO, tH, tW);
         return buildHeightmapData(carved[0], carved[1], climate, biomes, snow, H, W, tH, tW, blockM, scale);
+    }
+
+    // Channel ch of a channel-major grid of n pixels
+    private static float[] channel(float[] grid, int ch, int n) {
+        float[] out = new float[n];
+        System.arraycopy(grid, ch * n, out, 0, n);
+        return out;
+    }
+
+    // Every channel of an h x w channel-major grid cropped to the H x W block m pixels in from its corner
+    private static float[] cropChannels(float[] grid, int h, int w, int m, int H, int W) {
+        int channels = grid.length / (h * w);
+        float[] out = new float[channels * H * W];
+        for (int ch = 0; ch < channels; ch++) {
+            System.arraycopy(crop(grid, ch * h * w, w, m, m, H, W), 0, out, ch * H * W, H * W);
+        }
+        return out;
+    }
+
+    // The H x W block at (r0, c0) of the nH x nW native box m pixels inside an h x w grid, upsampled by scale
+    // the way the tile's heights are
+    private static float[] upsampled(float[] grid, int h, int w, int m, int nH, int nW, int scale,
+                                     int r0, int c0, int H, int W) {
+        float[][] up = LaplacianUtils.bilinearResize(to2D(crop(grid, 0, w, m, m, nH, nW), nH, nW),
+                nH * scale, nW * scale);
+        return cropFlat(up, r0, c0, H, W, nH * scale, nW * scale);
     }
 
     // The H x W block of a row-major grid srcW wide starting at offset, row r0, column c0

@@ -78,8 +78,6 @@ public final class TerrainDiffusionLifecycle {
                 TfmgCompat.OIL_DEPOSIT);
         registrar.register(ResourceLocation.fromNamespaceAndPath(MOD_ID, "tfmg_oil_well"),
                 TfmgCompat.OIL_WELL);
-        registrar.register(ResourceLocation.fromNamespaceAndPath(MOD_ID, "scarlet_snow_gate"),
-                TerralithSnow.SCARLET_SNOW_GATE);
     }
 
     @FunctionalInterface

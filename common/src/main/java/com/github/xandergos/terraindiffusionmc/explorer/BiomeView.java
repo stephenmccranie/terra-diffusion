@@ -32,24 +32,31 @@ final class BiomeView {
             return last;
         }
         int scale = WorldScaleManager.getCurrentScale();
-        float[][] raw = LocalTerrainProvider.explorerData(i0 - 1, j0 - 1, i0 + h + 1, j0 + w + 1, true);
+        int m = BiomeClassifier.LANDFORM_MARGIN, ww = w + 2 * m, wh = h + 2 * m;
+        float[][] raw = LocalTerrainProvider.explorerData(i0 - m, j0 - m, i0 + h + m, j0 + w + m, true);
         int pw = w + 2, ph = h + 2;
-        float[] padded = raw[0];
-        float[] elev = new float[h * w];
-        for (int r = 0; r < h; r++) {
-            System.arraycopy(padded, (r + 1) * pw + 1, elev, r * w, w);
-        }
-        int channels = raw[1].length / (ph * pw);
+        float[] padded = crop(raw[0], 0, ww, m - 1, m - 1, ph, pw);
+        float[] elev = crop(raw[0], 0, ww, m, m, h, w);
+        int channels = raw[1].length / (wh * ww);
         float[] climate = new float[channels * h * w];
         for (int ch = 0; ch < channels; ch++) {
-            for (int r = 0; r < h; r++) {
-                System.arraycopy(raw[1], ch * ph * pw + (r + 1) * pw + 1, climate, ch * h * w + r * w, w);
-            }
+            System.arraycopy(crop(raw[1], ch * wh * ww, ww, m, m, h, w), 0, climate, ch * h * w, h * w);
         }
+        float[] raise = crop(raw[1], 6 * wh * ww, ww, 0, 0, wh, ww);
+        float[][] land = BiomeClassifier.landform(raw[0], raise, wh, ww);
+        var landform = new BiomeClassifier.Landform(crop(land[0], 0, ww, m - 1, m - 1, ph, pw),
+                crop(land[1], 0, ww, m, m, h, w), crop(land[2], 0, ww, m, m, h, w));
         short[] ids = BiomeClassifier.classify(elev, climate, i0 * scale, j0 * scale, scale,
-                padded, h, w, NATIVE_RESOLUTION, null, null);
+                padded, landform, h, w, NATIVE_RESOLUTION, null, null);
         last = new Result(key, h, w, ids, paint(ids, padded, h, w));
         return last;
+    }
+
+    // The h x w block at (r0, c0) of a row-major grid srcW wide starting at offset
+    private static float[] crop(float[] src, int offset, int srcW, int r0, int c0, int h, int w) {
+        float[] out = new float[h * w];
+        for (int r = 0; r < h; r++) System.arraycopy(src, offset + (r0 + r) * srcW + c0, out, r * w, w);
+        return out;
     }
 
     private static float[][] paint(short[] ids, float[] padded, int h, int w) {

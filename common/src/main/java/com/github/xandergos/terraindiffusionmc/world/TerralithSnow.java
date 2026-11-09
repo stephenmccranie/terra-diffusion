@@ -14,7 +14,7 @@ import net.minecraft.world.level.levelgen.feature.configurations.NoneFeatureConf
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-// Turns off the snow Terralith paints on rocky and scarlet mountains, which this generator places above the snow line
+// Turns off the snow Terralith paints on rocky mountains, which this generator places above the snow line
 public final class TerralithSnow {
     private static final Logger LOG = LoggerFactory.getLogger(TerralithSnow.class);
 
@@ -22,12 +22,6 @@ public final class TerralithSnow {
             "mountains/rocky/snow",
             "mountains/rocky/funny_snow",
             "mountains/rocky/funny_snow_segwit_2x"};
-
-    // Scarlet shares this patch with emerald peaks, which keep it
-    private static final String SCARLET_SNOW = "mountains/scarlet/snow_patch";
-
-    public static final SnowPatchGate SCARLET_SNOW_GATE =
-            new SnowPatchGate(TerralithCompat.NAMESPACE, "scarlet_mountains");
 
     private TerralithSnow() {
     }
@@ -55,16 +49,6 @@ public final class TerralithSnow {
         }
         if (removed > 0) {
             LOG.info("Terralith rocky mountain snow turned off ({} features)", removed);
-        }
-
-        ResourceKey<ConfiguredFeature<?, ?>> patchKey = ResourceKey.create(Registries.CONFIGURED_FEATURE,
-                ResourceLocation.fromNamespaceAndPath(TerralithCompat.NAMESPACE, SCARLET_SNOW));
-        Holder.Reference<ConfiguredFeature<?, ?>> patch = configured.getHolder(patchKey).orElse(null);
-        if (patch != null && patch.value().feature() != SCARLET_SNOW_GATE) {
-            SCARLET_SNOW_GATE.wrap(patch.value());
-            ((HolderReferenceAccessor<ConfiguredFeature<?, ?>>) patch).terrainDiffusion$bindValue(
-                    new ConfiguredFeature<>(SCARLET_SNOW_GATE, NoneFeatureConfiguration.INSTANCE));
-            LOG.info("Terralith scarlet mountain snow patches turned off");
         }
     }
 }

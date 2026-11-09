@@ -544,8 +544,9 @@ public final class WorldPipeline implements AutoCloseable {
     }
 
     // The coarse climate around a box of native pixels: S native pixels per coarse pixel, the box's first
-    // coarse pixel, the windowed lapse regression {sea-level temperature, lapse} and the six central channels
-    private record CoarseClimate(int S, int ci1, int cj1, float[][][] lbt, float[][][] central) {}
+    // coarse pixel, the windowed lapse regression {sea-level temperature, lapse}, the six central channels and
+    // the central coarse elevation in metres
+    private record CoarseClimate(int S, int ci1, int cj1, float[][][] lbt, float[][][] central, float[][] elev) {}
 
     private CoarseClimate coarseClimate(int i1, int j1, int i2, int j2, int H, int W) {
         int lc = LATENT_COMPRESSION;
@@ -591,7 +592,8 @@ public final class WorldPipeline implements AutoCloseable {
             float[][] full = to2D(coarseMap[ch], cH, cW);
             centralCoarse[ch] = cropArray(full, cenPad, cenPad, cenH, cenW);
         }
-        return new CoarseClimate(S, ci1, cj1, lbt, centralCoarse);
+        float[][] centralElev = cropArray(to2D(coarseElev, cH, cW), cenPad, cenPad, cenH, cenW);
+        return new CoarseClimate(S, ci1, cj1, lbt, centralCoarse, centralElev);
     }
 
     // Air temperature at sea level, the regional baseline the climate lapses from, for a box of native pixels
@@ -610,6 +612,9 @@ public final class WorldPipeline implements AutoCloseable {
         return out;
     }
 
+    // Weakest fall of air temperature per metre of height away from the regional surface
+    static final float LAPSE_MIN = 0.0055f;
+
     // Channels: temperature at the model's height, its seasonal spread, precipitation, its variation, the
     // lapse rate, the regional temperature, how far the world raised the ground above the model's height, and
     // the model height of the land's regional base
@@ -619,6 +624,7 @@ public final class WorldPipeline implements AutoCloseable {
         CoarseClimate cc = coarseClimate(i1, j1, i2, j2, H, W);
         int S = cc.S(), ci1 = cc.ci1(), cj1 = cc.cj1();
         float[][][] lbt = cc.lbt(), centralCoarse = cc.central();
+        float[][] centralElev = cc.elev();
         int lH = lbt[0].length, lW = lbt[0][0].length;
         int cenH = centralCoarse[0].length, cenW = centralCoarse[0][0].length;
 
@@ -634,13 +640,18 @@ public final class WorldPipeline implements AutoCloseable {
 
                 float tBase = bilinearSample2D(lbt[0], lH, lW, gridY, gridX);
                 float beta  = bilinearSample2D(lbt[1], lH, lW, gridY, gridX);
-                float tempReal = tBase + beta * Math.max(0f, elevFlat[r * W + c]);
+                // The regional fit's lapse holds at the regional surface; away from it air changes by at
+                // least LAPSE_MIN per metre, where the fit is weaker
+                float alt = Math.max(0f, elevFlat[r * W + c]);
+                float regionalAlt = bilinearSample2D(centralElev, cenH, cenW, cenGridY, cenGridX);
+                float lapse = Math.min(beta, -LAPSE_MIN);
+                float tempReal = tBase + beta * regionalAlt + lapse * (alt - regionalAlt);
 
                 climate[r * W + c]             = tempReal;
                 climate[H * W + r * W + c]     = bilinearSample2D(centralCoarse[3], cenH, cenW, cenGridY, cenGridX);
                 climate[2 * H * W + r * W + c] = bilinearSample2D(centralCoarse[4], cenH, cenW, cenGridY, cenGridX);
                 climate[3 * H * W + r * W + c] = bilinearSample2D(centralCoarse[5], cenH, cenW, cenGridY, cenGridX);
-                climate[4 * H * W + r * W + c] = beta;
+                climate[4 * H * W + r * W + c] = lapse;
                 climate[5 * H * W + r * W + c] = bilinearSample2D(centralCoarse[2], cenH, cenW, cenGridY, cenGridX);
                 climate[6 * H * W + r * W + c] = heights[0][r * W + c] - heights[1][r * W + c];
                 climate[7 * H * W + r * W + c] = heights[2][r * W + c];
