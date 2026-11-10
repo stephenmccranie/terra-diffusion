@@ -34,16 +34,15 @@ public final class BlockWater {
     // Shapes bed and water (metres) of an H x W block grid in place and returns each column's flow. natural is the
     // land before rivers cut it, which banks never rise above; frac is where a river's water level sits within its
     // top block, -1 for lake water and NaN otherwise
-    static byte[] shape(float[] bed, float[] water, float[] natural, float[] frac, int H, int W,
-                        float blockM, int scale) {
+    static byte[] shape(float[] bed, float[] water, float[] natural, float[] frac, int H, int W, float blockM) {
         int n = H * W;
         int[] g = new int[n];
         int[] s = new int[n];
         boolean[] sea = new boolean[n];
         for (int i = 0; i < n; i++) {
-            g[i] = blockY(bed[i], scale);
+            g[i] = HeightConverter.toY(bed[i], blockM);
             if (water[i] > WaterNetwork.NO_WATER) {
-                int top = blockY(water[i], scale);
+                int top = HeightConverter.toY(water[i], blockM);
                 s[i] = top > g[i] ? top : NONE;
             } else if (g[i] < SEA) {
                 s[i] = SEA;
@@ -86,7 +85,7 @@ public final class BlockWater {
         }
         for (int i = 0; i < n; i++) {
             if (s[i] == NONE) continue;
-            if (sea[i] ? s[i] > SEA : s[i] > blockY(water[i], scale)) {
+            if (sea[i] ? s[i] > SEA : s[i] > HeightConverter.toY(water[i], blockM)) {
                 water[i] = metres(s[i], blockM);
                 sea[i] = false;
             }
@@ -170,7 +169,7 @@ public final class BlockWater {
                 for (int c = 0; c < W; c++) {
                     int i = r * W + c;
                     if (need[i] == NONE || need[i] < SEA || g[i] >= need[i]
-                            || blockY(natural[i], scale) < need[i]) continue;
+                            || HeightConverter.toY(natural[i], blockM) < need[i]) continue;
                     for (int k = 0; k < 4; k++) {
                         int rr = r + DR[k], cc = c + DC[k];
                         if (rr < 0 || cc < 0 || rr >= H || cc >= W) continue;
@@ -187,11 +186,6 @@ public final class BlockWater {
             }
         }
         return flow;
-    }
-
-    private static int blockY(float m, int scale) {
-        return HeightConverter.convertToMinecraftHeight(
-                (short) Math.max(-32768, Math.min(32767, (int) Math.floor(m))), scale);
     }
 
     // The lowest whole metre in block y

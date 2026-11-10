@@ -33,7 +33,7 @@ public final class TerralithSurfaceRules {
     private static NoiseGeneratorSettings splicedInto;
 
     // Beds of rivers and lakes are sand and clay below this height and stony above it
-    private static final short STONY_BEDS_FROM_M = 800;
+    private static final float STONY_BEDS_FROM_M = 800f;
 
     // The block height stony beds start at in the spliced rules; none while nothing is spliced
     private static volatile int stonyBedsFromY = Integer.MAX_VALUE;
@@ -116,7 +116,7 @@ public final class TerralithSurfaceRules {
 
         ((HolderReferenceAccessor<NoiseGeneratorSettings>) settings).terrainDiffusion$bindValue(merged);
         splicedInto = merged;
-        stonyBedsFromY = HeightConverter.convertToMinecraftHeight(STONY_BEDS_FROM_M);
+        stonyBedsFromY = HeightConverter.toY(STONY_BEDS_FROM_M, TerrainClimate.metresPerBlock());
         LOG.info("Applied Terralith surface rules to the terrain-diffusion overworld");
     }
 
@@ -154,7 +154,7 @@ public final class TerralithSurfaceRules {
     // Submerged ground: stony mixes of cobble, andesite, tuff, mud, dirt and gravel from STONY_BEDS_FROM_M up,
     // and below it sand with clay patches at least two blocks under water
     private static SurfaceRules.RuleSource waterBeds() {
-        VerticalAnchor stonyFrom = VerticalAnchor.absolute(HeightConverter.convertToMinecraftHeight(STONY_BEDS_FROM_M));
+        VerticalAnchor stonyFrom = VerticalAnchor.absolute(HeightConverter.toY(STONY_BEDS_FROM_M, TerrainClimate.metresPerBlock()));
         SurfaceRules.RuleSource sand = SurfaceRules.sequence(
                 SurfaceRules.ifTrue(SurfaceRules.ON_CEILING, block(Blocks.SANDSTONE)),
                 SurfaceRules.ifTrue(SurfaceRules.noiseCondition(Noises.PATCH, CLAY_PATCH), block(Blocks.CLAY)),

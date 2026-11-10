@@ -134,7 +134,7 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         float t = CaveBiomes.jitterTemp(data.climateT[column] / 127f, worldX, worldZ);
         float h = CaveBiomes.jitterHumidity(data.climateH[column] / 127f, worldX, worldZ);
         float e = CaveBiomes.jitterErosion(data.climateE[column] / 127f, worldX, worldZ);
-        float c = CaveBiomes.continentalnessAt(data.heightmap[column]);
+        float c = CaveBiomes.continentalnessAt(data.groundM[column]);
         float w = CaveBiomes.weirdnessAt(worldX, worldZ);
         int idx = CaveBiomes.select(t, h, c, e, w, depth, terralith);
         return idx == CaveBiomes.NONE ? null : caveBiomes[idx];

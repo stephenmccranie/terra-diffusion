@@ -52,15 +52,15 @@ public final class LocalTerrainProvider {
 
         public final int originX, originZ, size;
         public final KarstNetwork karst;
-        // Ground and water surface in whole metres of world height; NO_WATER on dry columns
-        public final short[] heightmap;
-        public final short[] waterLevel;
+        // Minecraft Y of each column's ground, and of the surface of its river or lake; NO_WATER on dry columns
+        public final short[] surfaceY;
+        public final short[] waterY;
+        // The ground in whole metres of world height
+        public final short[] groundM;
         public final short[] biomeIds;
         public final byte[] snowLayers;
         // Temperature, humidity and erosion as vanilla's climate axes, -127 to 127
         public final byte[] climateT, climateH, climateE;
-        // Minecraft Y of each column's ground
-        public final short[] surfaceY;
         // Model height in metres of the land's regional base under each column
         public final short[] regionalBaseM;
         // Lowest surface Y of each column and the columns CAVE_SIDE blocks around it
@@ -79,14 +79,14 @@ public final class LocalTerrainProvider {
             this.size = size;
             this.karst = karst;
             int n = size * size;
-            heightmap = new short[n];
-            waterLevel = new short[n];
+            surfaceY = new short[n];
+            waterY = new short[n];
+            groundM = new short[n];
             biomeIds = new short[n];
             snowLayers = new byte[n];
             climateT = new byte[n];
             climateH = new byte[n];
             climateE = new byte[n];
-            surfaceY = new short[n];
             regionalBaseM = new short[n];
             sideSurface = new short[n];
             riverWallLow = new short[n];
@@ -382,7 +382,7 @@ public final class LocalTerrainProvider {
         // At native resolution there is nothing between pixels to fill with detail
         float[] ground = scale > 1 ? addElevationNoise(smooth, smoothPadded, i1, j1, H, W, blockM) : smooth;
         float[][] carved = carveWater(ground, smooth, i1, j1, H, W, blockM, scale, 1);
-        byte[] flow = BlockWater.shape(carved[0], carved[1], ground, carved[2], H, W, blockM, scale);
+        byte[] flow = BlockWater.shape(carved[0], carved[1], ground, carved[2], H, W, blockM);
 
         int channels = climate.length / (H * W);
         float[] tileClimate = new float[channels * tH * tW];
@@ -403,7 +403,7 @@ public final class LocalTerrainProvider {
                 RiverHydrology.karstAt(pipeline, ti1 / (float) scale, tj1 / (float) scale, blockM));
         System.arraycopy(biomes, 0, data.biomeIds, 0, biomes.length);
         System.arraycopy(snow, 0, data.snowLayers, 0, snow.length);
-        fillColumns(data, carved[0], carved[1], flow, climate, H, W, blockM, scale);
+        fillColumns(data, carved[0], carved[1], flow, climate, H, W, blockM);
         return data;
     }
 
@@ -574,13 +574,13 @@ public final class LocalTerrainProvider {
 
     // Heights, water and per-column facts for the tile at the centre of an H x W grid with HALO around it
     private static void fillColumns(HeightmapData data, float[] bed, float[] water, byte[] flow, float[] climate,
-                                    int H, int W, float metersPerBlock, int scale) {
+                                    int H, int W, float metersPerBlock) {
         int[] groundY = new int[H * W];
         int[] waterY = new int[H * W];
         for (int i = 0; i < H * W; i++) {
-            groundY[i] = HeightConverter.convertToMinecraftHeight(meters(bed[i]), scale);
+            groundY[i] = HeightConverter.toY(bed[i], metersPerBlock);
             waterY[i] = water[i] <= WaterNetwork.NO_WATER ? Integer.MIN_VALUE
-                    : HeightConverter.convertToMinecraftHeight(meters(water[i]), scale);
+                    : HeightConverter.toY(water[i], metersPerBlock);
         }
 
         int size = data.size;
@@ -589,10 +589,8 @@ public final class LocalTerrainProvider {
             for (int c = 0; c < size; c++) {
                 int t = r * size + c;
                 int i = (r + HALO) * W + c + HALO;
-                data.heightmap[t] = meters(bed[i]);
-                data.waterLevel[t] = water[i] <= WaterNetwork.NO_WATER
-                        ? HeightmapData.NO_WATER
-                        : (short) Math.max(-32767, Math.min(32767, (int) Math.floor(water[i])));
+                data.groundM[t] = meters(bed[i]);
+                data.waterY[t] = waterY[i] == Integer.MIN_VALUE ? HeightmapData.NO_WATER : (short) waterY[i];
 
                 float tempC  = climate[i];
                 float precip = Math.max(1f, climate[2 * H * W + i]);

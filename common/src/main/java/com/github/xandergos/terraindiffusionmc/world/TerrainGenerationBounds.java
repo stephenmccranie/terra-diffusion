@@ -16,8 +16,8 @@ public final class TerrainGenerationBounds {
                 int ground = data.surfaceY[i];
                 highest = Math.max(highest, ground);
                 int water = ground < seaLevel ? seaLevel : Integer.MIN_VALUE;
-                if (data.waterLevel[i] != HeightmapData.NO_WATER) {
-                    water = HeightConverter.convertToMinecraftHeight(data.waterLevel[i]);
+                if (data.waterY[i] != HeightmapData.NO_WATER) {
+                    water = data.waterY[i];
                     highest = Math.max(highest, water);
                 }
                 // A curtain falls from up to its height above the water below it

@@ -44,8 +44,8 @@ public final class TerrainWater {
     // Minecraft Y of the surface of a column's river or lake, or NO_WATER
     public static int waterLevelY(int x, int z) {
         HeightmapData tile = LocalTerrainProvider.tileAt(x, z);
-        short metres = tile.waterLevel[tile.index(x, z)];
-        return metres == HeightmapData.NO_WATER ? NO_WATER : HeightConverter.convertToMinecraftHeight(metres);
+        short y = tile.waterY[tile.index(x, z)];
+        return y == HeightmapData.NO_WATER ? NO_WATER : y;
     }
 
     public static int groundY(int x, int z) {
@@ -189,10 +189,7 @@ public final class TerrainWater {
             HeightmapData tile = LocalTerrainProvider.tileAt(x, z);
             int i = tile.index(x, z);
             if (y >= tile.surfaceY[i]) {
-                short metres = tile.waterLevel[i];
-                int top = metres == HeightmapData.NO_WATER
-                        ? seaLevel
-                        : HeightConverter.convertToMinecraftHeight(metres);
+                int top = tile.waterY[i] == HeightmapData.NO_WATER ? seaLevel : tile.waterY[i];
                 int flow = tile.waterFlow[i] & 0xff;
                 if (flow != 0 && y >= top) {
                     if (flow <= BlockWater.MAX_RAMP) {
