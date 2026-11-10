@@ -183,9 +183,6 @@ public final class RiverHydrology {
 
     public static KarstNetwork karstAt(WorldPipeline pipeline, float nativeI, float nativeJ,
                                       float blockM) {
-        if (!KarstHydrology.ENABLED) {
-            return KarstNetwork.EMPTY;
-        }
         int ri = Math.floorDiv((int) Math.floor(nativeI), REGION_PX);
         int rj = Math.floorDiv((int) Math.floor(nativeJ), REGION_PX);
         Region region = regionFor(pipeline, ri, rj, blockM);
@@ -498,13 +495,13 @@ public final class RiverHydrology {
         }
     }
 
-    private static long pack(float key, int index) {
+    static long pack(float key, int index) {
         int bits = Float.floatToIntBits(key);
         bits ^= (bits >> 31) & 0x7FFFFFFF;
         return (((long) bits) << 32) | (index & 0xFFFFFFFFL);
     }
 
-    private static final class LongHeap {
+    static final class LongHeap {
         private long[] heap;
         private int size;
 
@@ -676,7 +673,7 @@ public final class RiverHydrology {
 
         InfiniteTensor.throwIfCancelled();
         KarstNetwork karst = KarstHydrology.solve(regionI, regionJ, windowI, windowJ, GRID,
-                elev, acc, channel, fillDepth, level, lake, width, down, REGION_PX, MARGIN_PX, blockM);
+                elev, acc, channel, fillDepth, level, lake, REGION_PX, MARGIN_PX, blockM);
         InfiniteTensor.throwIfCancelled();
         return new Region(regionI, regionJ, traced, crop(lake), crop(lakeDeep), karst, blockM);
     }

@@ -6,9 +6,6 @@ import java.util.Map;
 // Deterministic tile-seeded Gaussian noise matching Python world_pipeline.gaussian_noise_patch
 public final class GaussianNoisePatch {
 
-    private static final int DEFAULT_TILE_H = 256;
-    private static final int DEFAULT_TILE_W = 256;
-
     // Model windows overlap, so neighbouring windows read the same noise tiles. Windows are computed row by row,
     // so the tiles of the last two rows of windows are kept: up to 64 tiles, at most 16 MB.
     private static final int RECENT_TILES = 64;
@@ -69,14 +66,5 @@ public final class GaussianNoisePatch {
             RECENT.put(key, tile);
         }
         return tile;
-    }
-
-    public static float[][][] generate(long baseSeed, int y0, int x0, int h, int w, int channels) {
-        return generate(baseSeed, y0, x0, h, w, channels, DEFAULT_TILE_H, DEFAULT_TILE_W);
-    }
-
-    // Generate with tile size matching the requested region (per-tile in pipeline)
-    public static float[][][] generateTileSeeded(long baseSeed, int y0, int x0, int h, int w, int channels) {
-        return generate(baseSeed, y0, x0, h, w, channels, h, w);
     }
 }

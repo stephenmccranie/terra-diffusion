@@ -46,77 +46,76 @@ public final class LocalTerrainProvider {
         return fnl;
     }
 
+    // One tile of block columns: its corner and side in blocks, its karst, and every column's facts, row-major
     public static final class HeightmapData {
         public static final short NO_WATER = Short.MIN_VALUE;
 
-        public final short[][] heightmap;
-        public final short[][] biomeIds;
-
-        public final byte[][] snowLayers;
-        public final short[][] waterLevel;
-        public final byte[][] climateT;
-        public final byte[][] climateH;
-        public final byte[][] climateE;
-        public KarstNetwork karst = KarstNetwork.EMPTY;
-        // Minecraft Y of each column's ground, row-major
+        public final int originX, originZ, size;
+        public final KarstNetwork karst;
+        // Ground and water surface in whole metres of world height; NO_WATER on dry columns
+        public final short[] heightmap;
+        public final short[] waterLevel;
+        public final short[] biomeIds;
+        public final byte[] snowLayers;
+        // Temperature, humidity and erosion as vanilla's climate axes, -127 to 127
+        public final byte[] climateT, climateH, climateE;
+        // Minecraft Y of each column's ground
         public final short[] surfaceY;
-        // Model height in metres of the land's regional base under each column, row-major
+        // Model height in metres of the land's regional base under each column
         public final short[] regionalBaseM;
-        // Lowest surface Y of each column and the columns CAVE_SIDE blocks around it, row-major
+        // Lowest surface Y of each column and the columns CAVE_SIDE blocks around it
         public final short[] sideSurface;
-        // Y range, inclusive and row-major, where a column has river water within RIVER_WALL blocks
-        // of it; empty (low above high) away from rivers
+        // Y range, inclusive, where a column has river water within RIVER_WALL blocks of it; empty (low above
+        // high) away from rivers
         public final short[] riverWallLow;
         public final short[] riverWallHigh;
-        // How each column's top water moves, row-major: 0 still, a ramp level up to BlockWater.MAX_RAMP, or
+        // How each column's top water moves: 0 still, a ramp level up to BlockWater.MAX_RAMP, or
         // BlockWater.CURTAIN plus the height of a fall
         public final byte[] waterFlow;
-        public final int width;
-        public final int height;
 
-        public HeightmapData(short[][] heightmap, short[][] biomeIds, byte[][] snowLayers,
-                             short[][] waterLevel, byte[][] climateT, byte[][] climateH,
-                             byte[][] climateE, short[] surfaceY, short[] regionalBaseM, short[] sideSurface,
-                             short[] riverWallLow,
-                             short[] riverWallHigh, byte[] waterFlow, int width, int height) {
-            this.heightmap  = heightmap;
-            this.biomeIds   = biomeIds;
-            this.snowLayers = snowLayers;
-            this.waterLevel = waterLevel;
-            this.climateT   = climateT;
-            this.climateH   = climateH;
-            this.climateE   = climateE;
-            this.surfaceY = surfaceY;
-            this.regionalBaseM = regionalBaseM;
-            this.sideSurface = sideSurface;
-            this.riverWallLow = riverWallLow;
-            this.riverWallHigh = riverWallHigh;
-            this.waterFlow = waterFlow;
-            this.width      = width;
-            this.height     = height;
+        HeightmapData(int originX, int originZ, int size, KarstNetwork karst) {
+            this.originX = originX;
+            this.originZ = originZ;
+            this.size = size;
+            this.karst = karst;
+            int n = size * size;
+            heightmap = new short[n];
+            waterLevel = new short[n];
+            biomeIds = new short[n];
+            snowLayers = new byte[n];
+            climateT = new byte[n];
+            climateH = new byte[n];
+            climateE = new byte[n];
+            surfaceY = new short[n];
+            regionalBaseM = new short[n];
+            sideSurface = new short[n];
+            riverWallLow = new short[n];
+            riverWallHigh = new short[n];
+            waterFlow = new byte[n];
+        }
+
+        // Where block column (x, z), which lies in this tile, sits in its arrays
+        public int index(int x, int z) {
+            return (z - originZ) * size + (x - originX);
+        }
+
+        boolean holds(int x, int z) {
+            return (x & -size) == originX && (z & -size) == originZ;
         }
     }
 
-    private static record CacheKey(int i1, int j1, int i2, int j2) {}
+    private record TileKey(int tileX, int tileZ) {}
     // A tile is computed once, by the first thread to need it; later callers wait for that computation
-    private static record CacheEntry(CompletableFuture<HeightmapData> data, AtomicLong lastAccessed) {}
+    private record CacheEntry(CompletableFuture<HeightmapData> data, AtomicLong lastAccessed) {}
 
     // Blocks of area to keep cached, so tile size does not decide the size of the working set
-    private static final long CACHE_AREA_BLOCKS =
-            Long.parseLong(System.getProperty("terradiff.tileCacheArea", "16777216"));
+    private static final long CACHE_AREA_BLOCKS = 16777216L;
     private static final int MAX_CACHE_SIZE_HEADROOM = 8;
-    private static volatile int maxCacheSize;
-    private static final Map<CacheKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
+    private static final Map<TileKey, CacheEntry> CACHE = new ConcurrentHashMap<>();
     private static final AtomicLong CACHE_CLOCK = new AtomicLong();
 
-    private static int maxCacheSize() {
-        int cached = maxCacheSize;
-        if (cached != 0) return cached;
-        int tile = TerrainDiffusionConfig.tileSize();
-        long tiles = CACHE_AREA_BLOCKS / ((long) tile * tile);
-        cached = (int) Math.max(64L, Math.min(4096L, tiles));
-        maxCacheSize = cached;
-        return cached;
+    private static int maxCacheSize(int tileSize) {
+        return (int) Math.max(64L, Math.min(4096L, CACHE_AREA_BLOCKS / ((long) tileSize * tileSize)));
     }
 
     private static volatile LocalTerrainProvider INSTANCE;
@@ -129,8 +128,6 @@ public final class LocalTerrainProvider {
     private static volatile int worldGeneration;
 
     private final WorldPipeline pipeline;
-
-    private static final Object INIT_LOCK = new Object();
 
     private LocalTerrainProvider(long seed, PipelineModels models, boolean readOnlyDisk) {
         this.pipeline = new WorldPipeline(seed, models, readOnlyDisk);
@@ -149,33 +146,24 @@ public final class LocalTerrainProvider {
         PipelineModels models = loadedModels();
         if (INSTANCE == null) {
             INSTANCE = new LocalTerrainProvider(seed, models, false);
-            instanceSeed = seed;
-        } else if (instanceSeed != seed) {
+        } else {
             INSTANCE.pipeline.setSeed(seed);
-            instanceSeed = seed;
-            CACHE.clear();
         }
+        instanceSeed = seed;
+        CACHE.clear();
         worldGeneration++;
     }
 
     public static LocalTerrainProvider getInstance() {
-        if (INSTANCE != null) return INSTANCE;
-
-        synchronized(INIT_LOCK) {
-            if (INSTANCE != null) return INSTANCE;
-            INSTANCE = new LocalTerrainProvider(0L, loadedModels(), false);
-            instanceSeed = 0L;
+        LocalTerrainProvider instance = INSTANCE;
+        if (instance == null) {
+            throw new IllegalStateException("Terrain was asked for before a Terrain Diffusion world loaded");
         }
-
-        return INSTANCE;
+        return instance;
     }
 
     public static void clearCache() {
         CACHE.clear();
-    }
-
-    public static long getSeed() {
-        return instanceSeed;
     }
 
     // Changes on every world load, so position-keyed caches know to refill
@@ -272,16 +260,47 @@ public final class LocalTerrainProvider {
         return pipeline.seaLevelTemperature(i1, j1, i2, j2);
     }
 
-    public HeightmapData fetchHeightmap(int i1, int j1, int i2, int j2) {
-        CacheKey key = new CacheKey(i1, j1, i2, j2);
+    private static final class LastTile {
+        int generation = -1;
+        HeightmapData tile;
+    }
+
+    private static final ThreadLocal<LastTile> LAST = ThreadLocal.withInitial(LastTile::new);
+
+    // The tile holding block column (x, z). Generation asks column by column, so each thread keeps the tile it
+    // last asked for.
+    public static HeightmapData tileAt(int x, int z) {
+        LastTile last = LAST.get();
+        int generation = worldGeneration;
+        if (last.tile == null || last.generation != generation || !last.tile.holds(x, z)) {
+            int size = TerrainDiffusionConfig.tileSize();
+            last.tile = getInstance().tile(x & -size, z & -size, size);
+            last.generation = generation;
+        }
+        return last.tile;
+    }
+
+    // The tile holding block column (x, z) if it is already built, otherwise null
+    public static HeightmapData peekTileAt(int x, int z) {
+        int size = TerrainDiffusionConfig.tileSize();
+        CacheEntry cached = CACHE.get(new TileKey(x & -size, z & -size));
+        if (cached == null || !cached.data.isDone() || cached.data.isCompletedExceptionally()) {
+            return null;
+        }
+        cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
+        return cached.data.join();
+    }
+
+    HeightmapData tile(int tileX, int tileZ, int size) {
+        TileKey key = new TileKey(tileX, tileZ);
         CacheEntry entry = CACHE.get(key);
         if (entry == null) {
             CacheEntry mine = new CacheEntry(new CompletableFuture<>(), new AtomicLong());
             entry = CACHE.putIfAbsent(key, mine);
             if (entry == null) {
                 entry = mine;
-                generate(key, mine);
-                evictLruTo(maxCacheSize());
+                generate(key, size, mine);
+                evictLruTo(maxCacheSize(size));
             }
         }
         entry.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
@@ -293,15 +312,14 @@ public final class LocalTerrainProvider {
     }
 
     // Computes a tile on this thread; only its tensor reads run on the inference thread
-    private void generate(CacheKey key, CacheEntry entry) {
-        int i1 = key.i1(), j1 = key.j1(), i2 = key.i2(), j2 = key.j2();
+    private void generate(TileKey key, int size, CacheEntry entry) {
         try {
             int scale = WorldScaleManager.getCurrentScale();
             float blockM = NATIVE_RESOLUTION / scale;
-            HeightmapData data = buildTile(i1, j1, i2, j2, scale);
-            data.karst = RiverHydrology.karstAt(pipeline, i1 / (float) scale, j1 / (float) scale, blockM);
+            int i1 = key.tileZ(), j1 = key.tileX();
+            HeightmapData data = buildTile(key.tileX(), key.tileZ(), size, scale);
             RiverHydrology.prefetch(pipeline, Math.floorDiv(i1, scale), Math.floorDiv(j1, scale),
-                    Math.floorDiv(i2, scale), Math.floorDiv(j2, scale), blockM);
+                    Math.floorDiv(i1 + size, scale), Math.floorDiv(j1 + size, scale), blockM);
             entry.data.complete(data);
         } catch (Throwable e) {
             CACHE.remove(key, entry);
@@ -332,8 +350,9 @@ public final class LocalTerrainProvider {
 
     // Every column is a function of its position alone: the tile and its halo are rasterized from fields
     // the pipeline computes the same way for any box, and nothing afterwards looks across the raster
-    private HeightmapData buildTile(int ti1, int tj1, int ti2, int tj2, int scale) {
-        int i1 = ti1 - HALO, j1 = tj1 - HALO, i2 = ti2 + HALO, j2 = tj2 + HALO;
+    private HeightmapData buildTile(int tileX, int tileZ, int size, int scale) {
+        int ti1 = tileZ, tj1 = tileX, tH = size, tW = size;
+        int i1 = ti1 - HALO, j1 = tj1 - HALO, i2 = ti1 + size + HALO, j2 = tj1 + size + HALO;
         int H = i2 - i1, W = j2 - j1;
         float blockM = NATIVE_RESOLUTION / scale;
 
@@ -355,7 +374,6 @@ public final class LocalTerrainProvider {
         float[][] carved = carveWater(ground, smooth, i1, j1, H, W, blockM, scale, 1);
         byte[] flow = BlockWater.shape(carved[0], carved[1], ground, carved[2], H, W, blockM, scale);
 
-        int tH = ti2 - ti1, tW = tj2 - tj1;
         int channels = climate.length / (H * W);
         float[] tileClimate = new float[channels * tH * tW];
         for (int ch = 0; ch < channels; ch++) {
@@ -371,7 +389,12 @@ public final class LocalTerrainProvider {
                 crop(smooth, 0, W, HALO - 1, HALO - 1, tH + 2, tW + 2), landform, tH, tW, blockM, snow,
                 riverMask(crop(carved[1], 0, W, HALO, HALO, tH, tW)));
         BiomeClassifier.easeSnowNearWater(snow, carved[1], carved[0], H, W, HALO, tH, tW);
-        return buildHeightmapData(carved[0], carved[1], flow, climate, biomes, snow, H, W, tH, tW, blockM, scale);
+        HeightmapData data = new HeightmapData(tileX, tileZ, size,
+                RiverHydrology.karstAt(pipeline, ti1 / (float) scale, tj1 / (float) scale, blockM));
+        System.arraycopy(biomes, 0, data.biomeIds, 0, biomes.length);
+        System.arraycopy(snow, 0, data.snowLayers, 0, snow.length);
+        fillColumns(data, carved[0], carved[1], flow, climate, H, W, blockM, scale);
+        return data;
     }
 
     // Channel ch of a channel-major grid of n pixels
@@ -540,10 +563,8 @@ public final class LocalTerrainProvider {
     }
 
     // Heights, water and per-column facts for the tile at the centre of an H x W grid with HALO around it
-    private static HeightmapData buildHeightmapData(float[] bed, float[] water, byte[] flow, float[] climate,
-                                                     short[] biomeFlat, byte[] snowFlat,
-                                                     int H, int W, int tH, int tW, float metersPerBlock,
-                                                     int scale) {
+    private static void fillColumns(HeightmapData data, float[] bed, float[] water, byte[] flow, float[] climate,
+                                    int H, int W, float metersPerBlock, int scale) {
         int[] groundY = new int[H * W];
         int[] waterY = new int[H * W];
         for (int i = 0; i < H * W; i++) {
@@ -552,28 +573,14 @@ public final class LocalTerrainProvider {
                     : HeightConverter.convertToMinecraftHeight(meters(water[i]), scale);
         }
 
-        short[][] heightmap = new short[tH][tW];
-        short[][] biomeIds  = new short[tH][tW];
-        byte[][] snowLayers = new byte[tH][tW];
-        short[][] waterLevel = new short[tH][tW];
-        byte[][] climateT = new byte[tH][tW];
-        byte[][] climateH = new byte[tH][tW];
-        byte[][] climateE = new byte[tH][tW];
-        short[] surfaceY = new short[tH * tW];
-        short[] regionalBaseM = new short[tH * tW];
-        short[] sideSurface = new short[tH * tW];
-        short[] riverWallLow = new short[tH * tW];
-        short[] riverWallHigh = new short[tH * tW];
-        byte[] waterFlow = new byte[tH * tW];
+        int size = data.size;
         float mpb = Math.max(0.001f, metersPerBlock);
-        for (int r = 0; r < tH; r++)
-            for (int c = 0; c < tW; c++) {
-                int t = r * tW + c;
+        for (int r = 0; r < size; r++)
+            for (int c = 0; c < size; c++) {
+                int t = r * size + c;
                 int i = (r + HALO) * W + c + HALO;
-                heightmap[r][c]  = meters(bed[i]);
-                biomeIds[r][c]   = biomeFlat[t];
-                snowLayers[r][c] = snowFlat[t];
-                waterLevel[r][c] = water[i] <= WaterNetwork.NO_WATER
+                data.heightmap[t] = meters(bed[i]);
+                data.waterLevel[t] = water[i] <= WaterNetwork.NO_WATER
                         ? HeightmapData.NO_WATER
                         : (short) Math.max(-32767, Math.min(32767, (int) Math.floor(water[i])));
 
@@ -586,18 +593,18 @@ public final class LocalTerrainProvider {
                         lo = Math.min(lo, v);
                         hi = Math.max(hi, v);
                     }
-                climateT[r][c] = packUnit((tempC - 10.4f) / 17.1f);
-                climateH[r][c] = packUnit((float) ((Math.log10(precip) - 2.85) / 0.55));
-                climateE[r][c] = packUnit(1f - 2f * ((hi - lo) / mpb) / RELIEF_REF);
+                data.climateT[t] = packUnit((tempC - 10.4f) / 17.1f);
+                data.climateH[t] = packUnit((float) ((Math.log10(precip) - 2.85) / 0.55));
+                data.climateE[t] = packUnit(1f - 2f * ((hi - lo) / mpb) / RELIEF_REF);
 
-                surfaceY[t] = (short) groundY[i];
-                waterFlow[t] = flow[i];
-                regionalBaseM[t] = meters(climate[7 * H * W + i]);
+                data.surfaceY[t] = (short) groundY[i];
+                data.waterFlow[t] = flow[i];
+                data.regionalBaseM[t] = meters(climate[7 * H * W + i]);
                 int side = groundY[i];
                 for (int dr = -CAVE_SIDE; dr <= CAVE_SIDE; dr += CAVE_SIDE)
                     for (int dc = -CAVE_SIDE; dc <= CAVE_SIDE; dc += CAVE_SIDE)
                         side = Math.min(side, groundY[i + dr * W + dc]);
-                sideSurface[t] = (short) side;
+                data.sideSurface[t] = (short) side;
 
                 int wallLo = Short.MAX_VALUE, wallHi = Short.MIN_VALUE;
                 for (int dr = -RIVER_WALL; dr <= RIVER_WALL; dr++)
@@ -607,11 +614,9 @@ public final class LocalTerrainProvider {
                         wallLo = Math.min(wallLo, groundY[n] - RIVER_WALL);
                         wallHi = Math.max(wallHi, waterY[n] + 1);
                     }
-                riverWallLow[t] = (short) wallLo;
-                riverWallHigh[t] = (short) wallHi;
+                data.riverWallLow[t] = (short) wallLo;
+                data.riverWallHigh[t] = (short) wallHi;
             }
-        return new HeightmapData(heightmap, biomeIds, snowLayers, waterLevel, climateT, climateH, climateE,
-                surfaceY, regionalBaseM, sideSurface, riverWallLow, riverWallHigh, waterFlow, tW, tH);
     }
 
     // Window, in blocks, over which local relief sets vanilla's erosion axis
@@ -623,14 +628,5 @@ public final class LocalTerrainProvider {
     private static byte packUnit(float v) {
         float c = v < -1f ? -1f : v > 1f ? 1f : v;
         return (byte) Math.round(c * 127f);
-    }
-
-    public static HeightmapData peekHeightmap(int i1, int j1, int i2, int j2) {
-        CacheEntry cached = CACHE.get(new CacheKey(i1, j1, i2, j2));
-        if (cached == null || !cached.data.isDone() || cached.data.isCompletedExceptionally()) {
-            return null;
-        }
-        cached.lastAccessed.set(CACHE_CLOCK.incrementAndGet());
-        return cached.data.join();
     }
 }

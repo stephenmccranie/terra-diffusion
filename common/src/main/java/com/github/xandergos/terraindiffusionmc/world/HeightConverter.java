@@ -4,7 +4,6 @@ import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipelineModelConfig
 
 public class HeightConverter {
     public static final int SEA_LEVEL = 63;
-    private static final short MAX_PIPELINE_METERS = 10_000;
 
     private static final float MAX_OCEAN_DEPTH_BLOCKS = 196f;
 
@@ -30,10 +29,5 @@ public class HeightConverter {
         }
 
         return baseY + SEA_LEVEL;
-    }
-
-    // Returns the highest generated block Y expected from pipeline output for a given scale
-    public static int getMaxGeneratedYForScale(int configuredScale) {
-        return convertToMinecraftHeight(MAX_PIPELINE_METERS, configuredScale);
     }
 }

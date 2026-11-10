@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -66,8 +67,8 @@ public final class DiskTileCache implements AutoCloseable {
             }
             LOG.info("Terrain cache opened read-only at {}", root);
             return new DiskTileCache(root, fingerprint, true);
-        } catch (IOException | RuntimeException e) {
-            return null;
+        } catch (IOException e) {
+            throw new UncheckedIOException("Terrain cache unreadable at " + root, e);
         }
     }
 
@@ -93,9 +94,8 @@ public final class DiskTileCache implements AutoCloseable {
                         root, found[1], found[0] / (1024 * 1024));
             }
             return cache;
-        } catch (IOException | RuntimeException e) {
-            LOG.warn("Terrain cache unavailable at {}: {}", root, e.toString());
-            return null;
+        } catch (IOException e) {
+            throw new UncheckedIOException("Terrain cache unavailable at " + root, e);
         }
     }
 

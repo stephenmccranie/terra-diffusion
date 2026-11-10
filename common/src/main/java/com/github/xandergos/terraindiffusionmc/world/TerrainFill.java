@@ -23,10 +23,9 @@ public final class TerrainFill {
     private TerrainFill() {
     }
 
-    // Fills blocks minY..maxY of the chunk, whose columns lie in data, the heightmap tile with origin (dataX, dataZ)
+    // Fills blocks minY..maxY of the chunk, whose columns lie in the tile data
     public static void fill(ChunkAccess chunk, TerrainDiffusionDensityFunction terrain, HeightmapData data,
-                            int dataX, int dataZ, Beardifier structures, Aquifer.FluidPicker fluid, BlockState solid,
-                            int minY, int maxY) {
+                            Beardifier structures, Aquifer.FluidPicker fluid, BlockState solid, int minY, int maxY) {
         Heightmap floor = chunk.getOrCreateHeightmapUnprimed(Heightmap.Types.OCEAN_FLOOR_WG);
         Heightmap surface = chunk.getOrCreateHeightmapUnprimed(Heightmap.Types.WORLD_SURFACE_WG);
         Block at = new Block();
@@ -40,7 +39,7 @@ public final class TerrainFill {
                 LevelChunkSection section = null;
                 for (int y = maxY; y >= minY; y--) {
                     at.set(x, y, z);
-                    double density = terrain.density(data, x, y, z, x - dataX, z - dataZ) + structures.compute(at);
+                    double density = terrain.density(data, x, y, z) + structures.compute(at);
                     BlockState state = density > 0.0 ? solid : fluid.computeFluid(x, y, z).at(y);
                     if (state == AIR) continue;
                     int index = chunk.getSectionIndex(y);

@@ -33,10 +33,6 @@ public class FloatTensor {
         return s;
     }
 
-    public int ndim() {
-        return shape.length;
-    }
-
     public long byteSize() {
         return (long) data.length * Float.BYTES;
     }
@@ -64,23 +60,6 @@ public class FloatTensor {
             for (int k = 0; k < run; k++) data[dst + k] += src.data[from + k];
             for (int d = n - 2; d >= 0 && ++at[d] == count[d]; d--) at[d] = 0;
         }
-    }
-
-    // Extract a contiguous sub-region as a new zero-based tensor
-    public FloatTensor slice(int[][] region) {
-        int n = shape.length;
-        int[] newShape = new int[n];
-        for (int d = 0; d < n; d++) {
-            newShape[d] = region[d][1] - region[d][0];
-        }
-        FloatTensor result = new FloatTensor(newShape);
-        int[][] dstRegion = new int[n][2];
-        for (int d = 0; d < n; d++) {
-            dstRegion[d][0] = 0;
-            dstRegion[d][1] = newShape[d];
-        }
-        result.addFrom(this, dstRegion, region);
-        return result;
     }
 
     @Override

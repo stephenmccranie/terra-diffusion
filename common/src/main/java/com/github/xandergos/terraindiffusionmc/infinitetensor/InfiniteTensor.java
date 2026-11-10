@@ -102,7 +102,9 @@ public class InfiniteTensor {
 
         iterateWindows(lo, hi, windowIndex -> {
             FloatTensor cached = store.getCachedWindow(id, windowIndex);
-            if (cached == null) return;
+            if (cached == null) {
+                throw new IllegalStateException("Tensor '" + id + "' lost a window it had just computed");
+            }
 
             int[][] wBounds = outputWindow.getBounds(windowIndex);
 

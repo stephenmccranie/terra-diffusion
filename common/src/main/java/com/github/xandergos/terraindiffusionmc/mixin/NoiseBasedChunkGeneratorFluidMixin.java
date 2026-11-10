@@ -3,8 +3,6 @@ package com.github.xandergos.terraindiffusionmc.mixin;
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionDensityFunction;
 import com.github.xandergos.terraindiffusionmc.world.TerrainWater;
 import net.minecraft.world.level.levelgen.Aquifer;
-import net.minecraft.world.level.levelgen.DensityFunction;
-import net.minecraft.world.level.levelgen.DensityFunctions;
 import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 import org.slf4j.Logger;
@@ -25,18 +23,7 @@ public class NoiseBasedChunkGeneratorFluidMixin {
             NoiseGeneratorSettings settings,
             CallbackInfoReturnable<Aquifer.FluidPicker> cir) {
 
-        DensityFunction density = settings.noiseRouter().finalDensity();
-        // Cache markers preserve the underlying function, including its fluid policy.
-        while (true) {
-            if (density instanceof DensityFunctions.HolderHolder holder) {
-                density = holder.function().value();
-            } else if (density instanceof DensityFunctions.MarkerOrMarked marker) {
-                density = marker.wrapped();
-            } else {
-                break;
-            }
-        }
-        if (!(density instanceof TerrainDiffusionDensityFunction)) {
+        if (TerrainDiffusionDensityFunction.unwrap(settings.noiseRouter().finalDensity()) == null) {
             return;
         }
 

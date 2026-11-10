@@ -148,13 +148,6 @@ public class MemoryTileStore {
         }
     }
 
-    // Remove a single tensor and all its cached state
-    public void removeTensor(String id) {
-        tensors.remove(id);
-        windowCaches.remove(id);
-        cacheSizes.remove(id);
-    }
-
     private static List<Integer> toKey(int[] windowIndex) {
         List<Integer> key = new ArrayList<>(windowIndex.length);
         for (int v : windowIndex) key.add(v);

@@ -22,7 +22,6 @@ public class TerrainDiffusionMc implements ModInitializer {
         TerrainDiffusionLifecycle.registerFeatures((id, feature) -> Registry.register(BuiltInRegistries.FEATURE, id, feature));
         TerrainDiffusionLifecycle.bootstrap(FabricLoader.getInstance().getConfigDir(), FabricLoader.getInstance().getGameDir());
 
-        ServerLifecycleEvents.SERVER_STARTING.register(server -> TerrainDiffusionLifecycle.onServerStarting());
         ServerWorldEvents.LOAD.register((server, world) -> TerrainDiffusionLifecycle.onWorldLoad(world));
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> TerrainDiffusionLifecycle.onServerStopping());
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> TerrainDiffusionLifecycle.registerCommands(dispatcher));

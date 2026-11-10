@@ -62,24 +62,9 @@ public final class WorldPipelineModelConfig {
         return CONFIG.coarsePooling;
     }
 
-    // Coarse elevation pooling mode metadata from pipeline config
-    public static String elevCoarsePoolMode() {
-        return CONFIG.elevCoarsePoolMode;
-    }
-
-    // Coarse p5 pooling mode metadata from pipeline config
-    public static String p5CoarsePoolMode() {
-        return CONFIG.p5CoarsePoolMode;
-    }
-
     // Histogram raw metadata from pipeline config; may be null
     public static float[] histogramRaw() {
         return CONFIG.histogramRaw == null ? null : CONFIG.histogramRaw.clone();
-    }
-
-    // Synthetic-map drop-water percentage metadata from pipeline config
-    public static float dropWaterPercent() {
-        return CONFIG.dropWaterPercent;
     }
 
     private static ConfigJson loadConfig() {
@@ -125,12 +110,6 @@ public final class WorldPipelineModelConfig {
     }
 
     private static final class ConfigJson {
-        @SerializedName("_class_name")
-        String className;
-
-        @SerializedName("_diffusers_version")
-        String diffusersVersion;
-
         @SerializedName("coarse_means")
         float[] coarseMeans;
 
@@ -143,12 +122,6 @@ public final class WorldPipelineModelConfig {
         @SerializedName("cond_snr")
         float[] condSnr;
 
-        @SerializedName("drop_water_pct")
-        float dropWaterPercent;
-
-        @SerializedName("elev_coarse_pool_mode")
-        String elevCoarsePoolMode;
-
         @SerializedName("frequency_mult")
         float[] frequencyMult;
 
@@ -160,9 +133,6 @@ public final class WorldPipelineModelConfig {
 
         @SerializedName("native_resolution")
         float nativeResolution;
-
-        @SerializedName("p5_coarse_pool_mode")
-        String p5CoarsePoolMode;
 
         @SerializedName("residual_mean")
         float residualMean;

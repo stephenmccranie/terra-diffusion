@@ -31,16 +31,10 @@ public final class DeepOres {
 
     private static final Logger LOG = LoggerFactory.getLogger(DeepOres.class);
 
-    private static final boolean ENABLED =
-            !"false".equals(System.getProperty("terradiff.deepOres"));
-
     // Deepslate is pure below Y 0 and mixed up to Y 8, so 8 is the first wholly-stone level
-    private static final int STONE_FLOOR =
-            Integer.parseInt(System.getProperty("terradiff.patchFloor", "8"));
+    private static final int STONE_FLOOR = 8;
 
-
-    private static final double PATCH_SCALE =
-            Double.parseDouble(System.getProperty("terradiff.patchScale", "0.5"));
+    private static final double PATCH_SCALE = 0.5;
 
     // Blob-shaped rock features only, so surface disks and vegetation are not caught
     private static final List<String> PATCH_FEATURES = List.of(
@@ -60,8 +54,6 @@ public final class DeepOres {
 
     @SuppressWarnings("unchecked")
     public static void apply(ServerLevel world) {
-        if (!ENABLED) return;
-
         RegistryAccess access = world.registryAccess();
         Registry<PlacedFeature> registry = access.registryOrThrow(Registries.PLACED_FEATURE);
         RegistryOps<JsonElement> ops = RegistryOps.create(JsonOps.INSTANCE, access);

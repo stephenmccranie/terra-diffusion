@@ -12,22 +12,11 @@ public class TensorWindow {
         this.offset = offset.clone();
     }
 
-    // Non-overlapping windows starting at zero
-    public TensorWindow(int[] size) {
-        this.size = size.clone();
-        this.stride = size.clone();
-        this.offset = new int[size.length];
-    }
-
     // Overlapping windows with given stride, starting at zero
     public TensorWindow(int[] size, int[] stride) {
         this.size = size.clone();
         this.stride = stride.clone();
         this.offset = new int[size.length];
-    }
-
-    public int ndim() {
-        return size.length;
     }
 
     // Returns the pixel-space bounds [start, stop) for the given window index

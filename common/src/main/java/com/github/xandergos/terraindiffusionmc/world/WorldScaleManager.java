@@ -47,16 +47,6 @@ public final class WorldScaleManager {
         return currentScale;
     }
 
-    // Updates world scale for the currently loaded world and persists it immediately
-    public static void setCurrentScale(ServerLevel serverWorld, int configuredScale) {
-        int clampedScale = clampScale(configuredScale);
-
-        WorldScaleSettingsState worldScaleSettingsState = settingsForWorld(serverWorld);
-
-        worldScaleSettingsState.setScale(clampedScale);
-        currentScale = clampedScale;
-    }
-
     // Clamps world scale to supported runtime bounds
     public static int clampScale(int configuredScale) {
         return Math.max(MIN_SCALE, Math.min(MAX_SCALE, configuredScale));

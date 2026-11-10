@@ -8,7 +8,6 @@ import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.level.LevelEvent;
-import net.neoforged.neoforge.event.server.ServerStartingEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import net.neoforged.neoforge.registries.RegisterEvent;
 import org.slf4j.Logger;
@@ -25,7 +24,6 @@ public class TerrainDiffusionMc {
         modEventBus.addListener(this::onRegister);
         TerrainDiffusionLifecycle.bootstrap(FMLPaths.CONFIGDIR.get(), FMLPaths.GAMEDIR.get());
 
-        NeoForge.EVENT_BUS.addListener(this::onServerStarting);
         NeoForge.EVENT_BUS.addListener(this::onLevelLoad);
         NeoForge.EVENT_BUS.addListener(this::onServerStopping);
         NeoForge.EVENT_BUS.addListener(this::onRegisterCommands);
@@ -38,10 +36,6 @@ public class TerrainDiffusionMc {
                 TerrainDiffusionLifecycle.registerDensityFunctionCodecs(helper::register));
         event.register(Registries.FEATURE, helper ->
                 TerrainDiffusionLifecycle.registerFeatures(helper::register));
-    }
-
-    private void onServerStarting(ServerStartingEvent event) {
-        TerrainDiffusionLifecycle.onServerStarting();
     }
 
     private void onLevelLoad(LevelEvent.Load event) {

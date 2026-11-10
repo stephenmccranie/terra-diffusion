@@ -57,14 +57,8 @@ public final class SpawnSelector {
 
     // Returns the Minecraft block Y for the given block (X, Z), clamped to at least 64
     private static int heightmapY(int blockX, int blockZ) {
-        try {
-            LocalTerrainProvider.HeightmapData data =
-                    LocalTerrainProvider.getInstance().fetchHeightmap(blockZ, blockX, blockZ + 1, blockX + 1);
-            return Math.max(data.surfaceY[0], 64);
-        } catch (Exception e) {
-            LOG.error("SpawnSelector: failed to fetch heightmap at ({}, {})", blockX, blockZ, e);
-            return 64;
-        }
+        LocalTerrainProvider.HeightmapData tile = LocalTerrainProvider.tileAt(blockX, blockZ);
+        return Math.max(tile.surfaceY[tile.index(blockX, blockZ)], 64);
     }
 
     // Returns a spawn position at block (0, 0) using the heightmap Y, clamped to at least 64

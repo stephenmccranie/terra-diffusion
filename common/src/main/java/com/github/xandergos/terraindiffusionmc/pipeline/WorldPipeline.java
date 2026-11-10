@@ -9,6 +9,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import com.github.xandergos.terraindiffusionmc.platform.PlatformPaths;
@@ -430,16 +432,6 @@ public final class WorldPipeline implements AutoCloseable {
         return result;
     }
 
-    // Returns the current world seed
-    public long getSeed() {
-        return seed;
-    }
-
-    // Returns the total count of newly computed tensor windows since startup
-    public long getTotalComputedWindowCount() {
-        return tileStore.getTotalComputedWindowCount();
-    }
-
     // Runs tensor reads on the inference thread, reporting any windows they had to compute
     private <T> T read(int height, int width, Callable<T> reads) {
         return INFERENCE.call(() -> {
@@ -720,9 +712,6 @@ public final class WorldPipeline implements AutoCloseable {
              + wy*(1-wx)*src[y1][x0] + wy*wx*src[y1][x1];
     }
 
-    private static final boolean DISK_CACHE_ENABLED =
-            !"false".equals(System.getProperty("terradiff.diskCache"));
-
     private static volatile Path cacheRootOverride;
 
     // Set from the world-load hook so the cache lives beside the save it belongs to
@@ -739,19 +728,12 @@ public final class WorldPipeline implements AutoCloseable {
             diskCache = null;
         }
         tileStore.setDiskCache(null);
-        if (!DISK_CACHE_ENABLED) {
-            return;
-        }
-        try {
-            Path base = cacheRootOverride != null ? cacheRootOverride : PlatformPaths.gameDir();
-            Path root = base.resolve("terradiff-cache").resolve(Long.toUnsignedString(seed));
-            diskCache = readOnlyDisk
-                    ? DiskTileCache.openReadOnly(root, pipelineFingerprint())
-                    : DiskTileCache.open(root, pipelineFingerprint());
-            tileStore.setDiskCache(diskCache);
-        } catch (RuntimeException e) {
-            LOG.warn("Terrain cache not attached: {}", e.toString());
-        }
+        Path base = cacheRootOverride != null ? cacheRootOverride : PlatformPaths.gameDir();
+        Path root = base.resolve("terradiff-cache").resolve(Long.toUnsignedString(seed));
+        diskCache = readOnlyDisk
+                ? DiskTileCache.openReadOnly(root, pipelineFingerprint())
+                : DiskTileCache.open(root, pipelineFingerprint());
+        tileStore.setDiskCache(diskCache);
     }
 
     private static String pipelineFingerprint() {
@@ -770,8 +752,8 @@ public final class WorldPipeline implements AutoCloseable {
             try {
                 Path p = ModelAssetManager.resolveAssetPath(model);
                 sb.append(Files.size(p)).append('@').append(Files.getLastModifiedTime(p).toMillis());
-            } catch (Exception e) {
-                sb.append("unknown");
+            } catch (IOException e) {
+                throw new UncheckedIOException("Model file unreadable: " + model, e);
             }
         }
         return sb.toString();

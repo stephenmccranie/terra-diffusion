@@ -2,44 +2,26 @@ package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.pipeline.BlockWater;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
-import net.minecraft.world.level.dimension.DimensionType;
-import net.minecraft.world.level.levelgen.DensityFunction;
-import net.minecraft.world.level.levelgen.DensityFunctions;
 
-/** Conservative terrain/fluid ceiling; unsupported data keeps the full generation range. */
+/** How high a chunk's terrain and water reach, so the fill stops there. */
 public final class TerrainGenerationBounds {
     private TerrainGenerationBounds() {}
 
-    // The terrain-diffusion density a final density is, through holders; null if it is anything else
-    public static TerrainDiffusionDensityFunction terrain(DensityFunction density) {
-        while (density instanceof DensityFunctions.HolderHolder holder) density = holder.function().value();
-        return density.getClass() == TerrainDiffusionDensityFunction.class ? (TerrainDiffusionDensityFunction) density : null;
-    }
-
-    public static long upperY(HeightmapData data, int x0, int z0, int scale, int seaLevel) {
-        if (data == null || data.heightmap == null || x0 < 0 || z0 < 0
-                || x0 + 16 > data.width || z0 + 16 > data.height
-                || data.heightmap.length < z0 + 16) return Long.MAX_VALUE;
-        long highest = seaLevel;
+    // The highest block of ground, water or falling water in the chunk whose corner is block (x0, z0)
+    public static int upperY(HeightmapData data, int x0, int z0, int seaLevel) {
+        int highest = seaLevel;
         for (int z = z0; z < z0 + 16; z++) {
-            if (data.heightmap[z] == null || data.heightmap[z].length < x0 + 16)
-                return Long.MAX_VALUE;
-            if (data.waterLevel != null && (data.waterLevel.length <= z
-                    || data.waterLevel[z] == null || data.waterLevel[z].length < x0 + 16))
-                return Long.MAX_VALUE;
             for (int x = x0; x < x0 + 16; x++) {
-                int ground = data.surfaceY[z * data.width + x];
-                // Avoid the density function's integer-subtraction overflow for exotic scales/models.
-                if (ground < DimensionType.MIN_Y || ground > DimensionType.MAX_Y) return Long.MAX_VALUE;
+                int i = data.index(x, z);
+                int ground = data.surfaceY[i];
                 highest = Math.max(highest, ground);
                 int water = ground < seaLevel ? seaLevel : Integer.MIN_VALUE;
-                if (data.waterLevel != null && data.waterLevel[z][x] != HeightmapData.NO_WATER) {
-                    water = HeightConverter.convertToMinecraftHeight(data.waterLevel[z][x], scale);
-                    if (water < DimensionType.MIN_Y || water > DimensionType.MAX_Y) return Long.MAX_VALUE;
+                if (data.waterLevel[i] != HeightmapData.NO_WATER) {
+                    water = HeightConverter.convertToMinecraftHeight(data.waterLevel[i]);
                     highest = Math.max(highest, water);
                 }
                 // A curtain falls from up to its height above the water below it
-                int flow = data.waterFlow[z * data.width + x] & 0xff;
+                int flow = data.waterFlow[i] & 0xff;
                 if (flow >= BlockWater.CURTAIN && water != Integer.MIN_VALUE) {
                     highest = Math.max(highest, water + flow - BlockWater.CURTAIN - 1);
                 }
@@ -48,8 +30,8 @@ public final class TerrainGenerationBounds {
         return highest;
     }
 
+    // How many of the generator's cells, counted up from minCellY, reach upperY
     public static int cellCount(long upperY, int minCellY, int cellHeight, int original) {
-        if (upperY == Long.MAX_VALUE || cellHeight <= 0 || original <= 0) return original;
         long cells = Math.floorDiv(upperY, cellHeight) - minCellY + 1;
         return (int) Math.min(original, Math.max(1L, cells));
     }

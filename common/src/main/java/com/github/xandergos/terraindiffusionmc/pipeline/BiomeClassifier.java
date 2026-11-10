@@ -1,19 +1,13 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import static com.github.xandergos.terraindiffusionmc.pipeline.SurfaceBiomes.*;
+
 // Rule-based biome classifier port of _classify_biome in minecraft_api.py
 public final class BiomeClassifier {
-    // Fixed-seed noise instances (matching Python's module-level _TEMP_NOISE etc.)
-    private static final FastNoiseLite TEMP_NOISE, TEMP_NOISE_FINE;
-    private static final FastNoiseLite PRECIP_NOISE;
-    private static final FastNoiseLite SNOW_NOISE, SNOW_NOISE_FINE;
-
-    static {
-        TEMP_NOISE = makeFnl(12345, 1f/500f, 3, 2f, 0.5f);
-        TEMP_NOISE_FINE = makeFnl(54321, 1f/128f, 2, 2f, 0.5f);
-        PRECIP_NOISE = makeFnl(12345, 1f/500f, 5, 2f, 0.5f);
-        SNOW_NOISE = makeFnl(12345, 1f/500f, 3, 2f, 0.5f);
-        SNOW_NOISE_FINE = makeFnl(54321, 1f/128f, 2, 2f, 0.5f);
-    }
+    // One coarse and one fine field vary both the temperature and the snow line; precipitation has its own
+    private static final FastNoiseLite COARSE_NOISE = makeFnl(12345, 1f/500f, 3, 2f, 0.5f);
+    private static final FastNoiseLite FINE_NOISE = makeFnl(54321, 1f/128f, 2, 2f, 0.5f);
+    private static final FastNoiseLite PRECIP_NOISE = makeFnl(12345, 1f/500f, 5, 2f, 0.5f);
 
     private static FastNoiseLite makeFnl(int seed, float freq, int oct, float lac, float gain) {
         FastNoiseLite fnl = new FastNoiseLite(seed);
@@ -25,8 +19,6 @@ public final class BiomeClassifier {
         fnl.SetFractalGain(gain);
         return fnl;
     }
-
-    private static final float NATIVE_RESOLUTION_M = WorldPipelineModelConfig.nativeResolution();
 
     // Trees need a growing season, the days averaging above 0.9 C, at least 94 days long and averaging
     // at least 6.4 C (Paulsen and Koerner 2014); this one rule places tree lines on mountains and in the arctic
@@ -66,17 +58,6 @@ public final class BiomeClassifier {
     private static final int SNOW_BLOCK_DEPTH = 8;
 
     private static final int MAX_SNOW_DEPTH = SNOW_BLOCK_DEPTH + LAYERS_PER_TIER;
-
-    // Biome IDs
-    static final short PLAINS = 1, RIVER = 7, FROZEN_RIVER = 11;
-    static final short SNOWY_PLAINS = 3, DESERT = 5, SWAMP = 6;
-    static final short FOREST = 8, TAIGA = 15, SNOWY_TAIGA = 16, SAVANNA = 17;
-    static final short WINDSWEPT_HILLS = 19, JUNGLE = 23, BADLANDS = 26, WOODED_BADLANDS = 27, ERODED_BADLANDS = 28, MEADOW = 29;
-    static final short GROVE = 31, SNOWY_SLOPES = 32, FROZEN_PEAKS = 33, STONY_PEAKS = 35;
-    static final short WARM_OCEAN = 41, OCEAN = 44, COLD_OCEAN = 46, FROZEN_OCEAN = 48;
-    static final short BEACH = 38, SNOWY_BEACH = 39, STONY_SHORE = 40;
-    static final short LUKEWARM_OCEAN = 42, DEEP_LUKEWARM_OCEAN = 43, DEEP_OCEAN = 45, DEEP_COLD_OCEAN = 47, DEEP_FROZEN_OCEAN = 49;
-    static final short FOREST_SPARSE = 108, TAIGA_SPARSE = 115, SNOWY_TAIGA_SPARSE = 116;
 
     // Native pixels the land's shape is averaged over: what reads as a slope, a rise or a shore
     public static final int LANDFORM_RADIUS = 6;
@@ -134,16 +115,13 @@ public final class BiomeClassifier {
             for (int c = 0; c < W; c++) {
                 int idx = r * W + c;
                 float nx = j0 + c * coordStep, ny = i0 + r * coordStep;
-                float tnc = TEMP_NOISE.GetNoise(nx, ny);
-                float tnf = TEMP_NOISE_FINE.GetNoise(nx, ny);
-                tempNoise[idx] = 0.4f * tnc + 0.2f * tnf;
+                float coarse = COARSE_NOISE.GetNoise(nx, ny);
+                float fine = FINE_NOISE.GetNoise(nx, ny);
+                tempNoise[idx] = 0.4f * coarse + 0.2f * fine;
+                snowNoise[idx] = 3.0f * coarse + 2.0f * fine;
 
                 float pn = PRECIP_NOISE.GetNoise(nx, ny);
                 precipNoiseFact[idx] = 1.0f + 0.2f * pn;
-
-                float snc = SNOW_NOISE.GetNoise(nx, ny);
-                float snf = SNOW_NOISE_FINE.GetNoise(nx, ny);
-                snowNoise[idx] = 3.0f * snc + 2.0f * snf;
             }
         }
 
@@ -229,7 +207,7 @@ public final class BiomeClassifier {
                 boolean slopeBare   = slope >= bareThreshold;
                 if (slopeMedium) {
                     if (treesForest || treesDense || treesRainforest) { treesSparse = true; }
-                    treesForest = treesForest && false; treesDense = false; treesRainforest = false;
+                    treesForest = false; treesDense = false; treesRainforest = false;
                 }
                 if (slopeBare) {
                     treesNone = true; treesSparse = false; treesForest = false;

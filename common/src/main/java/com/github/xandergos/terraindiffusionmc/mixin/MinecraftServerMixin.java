@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.mixin;
 
 import com.github.xandergos.terraindiffusionmc.pipeline.SpawnSelector;
+import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -18,7 +19,8 @@ public class MinecraftServerMixin {
     @Inject(method = "setInitialSpawn", at = @At("HEAD"), cancellable = true)
     private static void overrideWorldSpawn(ServerLevel world, ServerLevelData worldProperties,
                                            boolean bonusChest, boolean debugWorld, CallbackInfo ci) {
-        if (!world.dimension().equals(Level.OVERWORLD)) {
+        if (!world.dimension().equals(Level.OVERWORLD)
+                || !(world.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource)) {
             return;
         }
 

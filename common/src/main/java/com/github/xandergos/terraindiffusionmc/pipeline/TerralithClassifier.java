@@ -2,7 +2,7 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import com.github.xandergos.terraindiffusionmc.world.TerrainClimate;
 
-import static com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeIds.*;
+import static com.github.xandergos.terraindiffusionmc.pipeline.SurfaceBiomes.*;
 
 public final class TerralithClassifier {
     public static final short NONE = 0;
@@ -147,9 +147,9 @@ public final class TerralithClassifier {
     }
 
     public static short river(TerrainSample s) {
-        if (s.frost < SNOW_LINE_C) return BiomeClassifier.FROZEN_RIVER;
+        if (s.frost < SNOW_LINE_C) return FROZEN_RIVER;
         if (s.tReg >= WARM_SEA_C) return WARM_RIVER;
-        return BiomeClassifier.RIVER;
+        return RIVER;
     }
 
     public static short pick(TerrainSample s) {
@@ -163,7 +163,7 @@ public final class TerralithClassifier {
         boolean snowy = s.aboveTreeLine ? s.permanentSnow : s.frost < SNOW_LINE_C;
 
         if (s.elev < SHORE_BLOCKS * TerrainClimate.metresPerBlock() && s.seaShare >= SHORE_SEA_SHARE) {
-            if (s.slope >= STEEP) return BiomeClassifier.STONY_SHORE;
+            if (s.slope >= STEEP) return STONY_SHORE;
             if (s.slope < GENTLE) return beach(s, heatOf(s), wet, snowy);
         }
         int zone = snowy ? NOT_ARID : aridZone(s);
@@ -176,7 +176,7 @@ public final class TerralithClassifier {
     }
 
     static boolean terracotta(short b) {
-        return b == BiomeClassifier.BADLANDS || b == BiomeClassifier.ERODED_BADLANDS || b == WHITE_MESA || b == WARPED_MESA
+        return b == BADLANDS || b == ERODED_BADLANDS || b == WHITE_MESA || b == WARPED_MESA
                 || b == PAINTED_MOUNTAINS || b == BRYCE_CANYON || b == RED_OASIS;
     }
 
@@ -204,7 +204,7 @@ public final class TerralithClassifier {
     }
 
     static boolean desertFamily(short b) {
-        return b == BiomeClassifier.DESERT || b == ANCIENT_SANDS || b == LUSH_DESERT || b == SANDSTONE_VALLEY
+        return b == DESERT || b == ANCIENT_SANDS || b == LUSH_DESERT || b == SANDSTONE_VALLEY
                 || b == DESERT_CANYON || b == DESERT_SPIRES || b == DESERT_OASIS;
     }
 
@@ -215,8 +215,8 @@ public final class TerralithClassifier {
 
     static boolean temperateGrass(short b) {
         return b == STEPPE || b == HIGHLANDS || b == ALPINE_HIGHLANDS || b == TEMPERATE_HIGHLANDS || b == BRUSHLAND
-                || b == BiomeClassifier.PLAINS || b == BiomeClassifier.MEADOW || b == BiomeClassifier.FOREST_SPARSE
-                || b == BiomeClassifier.TAIGA_SPARSE || b == BiomeClassifier.WINDSWEPT_HILLS;
+                || b == PLAINS || b == MEADOW || b == FOREST_SPARSE
+                || b == TAIGA_SPARSE || b == WINDSWEPT_HILLS;
     }
 
     private static short arid(TerrainSample s, int zone) {
@@ -232,18 +232,18 @@ public final class TerralithClassifier {
                 if (valley) return SANDSTONE_VALLEY;
                 if (oasis) return DESERT_OASIS;
                 if (broad > Q_TOP_20) return ANCIENT_SANDS;
-                return s.moist >= DESERT_MOIST - LUSH_MARGIN ? LUSH_DESERT : BiomeClassifier.DESERT;
+                return s.moist >= DESERT_MOIST - LUSH_MARGIN ? LUSH_DESERT : DESERT;
             case MESA_ZONE:
-                if (redSandBelt(s)) return BiomeClassifier.BADLANDS;
+                if (redSandBelt(s)) return BADLANDS;
                 if (cliff || (upper && steep)) return BRYCE_CANYON;
                 if (high) return gentle && v01(SHOWPIECE, s) > SHOWPIECE_THRESHOLD ? WARPED_MESA : PAINTED_MOUNTAINS;
-                if (upper) return broad > Q_MEDIAN ? WHITE_MESA : BiomeClassifier.ERODED_BADLANDS;
+                if (upper) return broad > Q_MEDIAN ? WHITE_MESA : ERODED_BADLANDS;
                 if (oasis) return RED_OASIS;
-                return BiomeClassifier.ERODED_BADLANDS;
+                return ERODED_BADLANDS;
             default:
                 boolean hot = s.zoneTemp >= FRINGE_HOT_C;
-                if (cliff) return hot ? SAVANNA_SLOPES : BiomeClassifier.WOODED_BADLANDS;
-                return hot ? SAVANNA_BADLANDS : BiomeClassifier.WOODED_BADLANDS;
+                if (cliff) return hot ? SAVANNA_SLOPES : WOODED_BADLANDS;
+                return hot ? SAVANNA_BADLANDS : WOODED_BADLANDS;
         }
     }
 
@@ -278,19 +278,19 @@ public final class TerralithClassifier {
 
     private static short ocean(TerrainSample s) {
         boolean deep = deepSea(s);
-        if (s.tReg < FROZEN_SEA_C) return deep ? BiomeClassifier.DEEP_FROZEN_OCEAN : BiomeClassifier.FROZEN_OCEAN;
-        if (s.tReg < COLD_SEA_C) return deep ? BiomeClassifier.DEEP_COLD_OCEAN : BiomeClassifier.COLD_OCEAN;
-        if (s.tReg >= WARM_SEA_C) return deep ? DEEP_WARM_OCEAN : BiomeClassifier.WARM_OCEAN;
-        if (s.tReg >= LUKEWARM_SEA_C) return deep ? BiomeClassifier.DEEP_LUKEWARM_OCEAN : BiomeClassifier.LUKEWARM_OCEAN;
-        return deep ? BiomeClassifier.DEEP_OCEAN : BiomeClassifier.OCEAN;
+        if (s.tReg < FROZEN_SEA_C) return deep ? DEEP_FROZEN_OCEAN : FROZEN_OCEAN;
+        if (s.tReg < COLD_SEA_C) return deep ? DEEP_COLD_OCEAN : COLD_OCEAN;
+        if (s.tReg >= WARM_SEA_C) return deep ? DEEP_WARM_OCEAN : WARM_OCEAN;
+        if (s.tReg >= LUKEWARM_SEA_C) return deep ? DEEP_LUKEWARM_OCEAN : LUKEWARM_OCEAN;
+        return deep ? DEEP_OCEAN : OCEAN;
     }
 
     private static short beach(TerrainSample s, int heat, int wet, boolean snowy) {
-        if (snowy) return BiomeClassifier.SNOWY_BEACH;
+        if (snowy) return SNOWY_BEACH;
         float local = v01(VARIANT_LOCAL, s);
         if (heat == BOREAL && wet >= SEMIARID && local < Q_MEDIAN) return GRAVEL_BEACH;
         if (heat == TEMPERATE && wet >= SEMIARID && local < Q_BOT_25) return GRAVEL_BEACH;
-        return BiomeClassifier.BEACH;
+        return BEACH;
     }
 
     private static boolean volcanic(TerrainSample s) {
@@ -357,11 +357,11 @@ public final class TerralithClassifier {
             if (coastal) {
                 return s.airC < BiomeClassifier.FROZEN_SURFACE_C
                         ? FROZEN_CLIFFS
-                        : BiomeClassifier.SNOWY_SLOPES;
+                        : SNOWY_SLOPES;
             }
-            if (!BiomeClassifier.frozenSurface(s)) return BiomeClassifier.SNOWY_SLOPES;
+            if (!BiomeClassifier.frozenSurface(s)) return SNOWY_SLOPES;
             if (s.airC < ICE_C && local > GLACIER_THRESHOLD) return GLACIAL_CHASM;
-            return local < Q_BOT_25 ? FROZEN_CLIFFS : BiomeClassifier.FROZEN_PEAKS;
+            return local < Q_BOT_25 ? FROZEN_CLIFFS : FROZEN_PEAKS;
         }
         if (heat >= TEMPERATE && s.relElev < HIGH_M && volcanic(s)) return BASALT_CLIFFS;
         if (s.aboveTreeLine) {
@@ -401,9 +401,9 @@ public final class TerralithClassifier {
         }
 
         if (steep) {
-            if (BiomeClassifier.frozenSurface(s)) return BiomeClassifier.FROZEN_PEAKS;
-            if (wet >= HUMID && !s.aboveTreeLine) return BiomeClassifier.GROVE;
-            return BiomeClassifier.SNOWY_SLOPES;
+            if (BiomeClassifier.frozenSurface(s)) return FROZEN_PEAKS;
+            if (wet >= HUMID && !s.aboveTreeLine) return GROVE;
+            return SNOWY_SLOPES;
         }
 
         if (wet <= ARID) {
@@ -413,25 +413,25 @@ public final class TerralithClassifier {
         }
 
         if (s.aboveTreeLine) {
-            if (hill) return BiomeClassifier.SNOWY_SLOPES;
-            return wet == SEMIARID ? GRAVEL_DESERT : BiomeClassifier.SNOWY_PLAINS;
+            if (hill) return SNOWY_SLOPES;
+            return wet == SEMIARID ? GRAVEL_DESERT : SNOWY_PLAINS;
         }
 
         if (wet == SEMIARID) {
-            if (hill) return BiomeClassifier.SNOWY_SLOPES;
-            return lowFlat ? WINTRY_LOWLANDS : BiomeClassifier.SNOWY_PLAINS;
+            if (hill) return SNOWY_SLOPES;
+            return lowFlat ? WINTRY_LOWLANDS : SNOWY_PLAINS;
         }
 
         if (wet == SUBHUMID) {
-            if (hill) return broad > Q_MEDIAN ? SNOWY_MAPLE_FOREST : BiomeClassifier.GROVE;
-            return BiomeClassifier.SNOWY_TAIGA_SPARSE;
+            if (hill) return broad > Q_MEDIAN ? SNOWY_MAPLE_FOREST : GROVE;
+            return SNOWY_TAIGA_SPARSE;
         }
 
         if (wet == HUMID) {
             if (high) return ALPINE_GROVE;
             if (v01(SHOWPIECE, s) > SNOWY_SHOWPIECE_THRESHOLD) return SNOWY_CHERRY_GROVE;
-            if (hill) return broad > Q_MEDIAN ? SNOWY_SHIELD : BiomeClassifier.GROVE;
-            return broad > Q_MEDIAN ? WINTRY_FOREST : BiomeClassifier.SNOWY_TAIGA;
+            if (hill) return broad > Q_MEDIAN ? SNOWY_SHIELD : GROVE;
+            return broad > Q_MEDIAN ? WINTRY_FOREST : SNOWY_TAIGA;
         }
 
         if (marsh) return ICE_MARSH;
@@ -451,7 +451,7 @@ public final class TerralithClassifier {
                     if (gentle && wet <= ARID && v01(SHOWPIECE, s) > SHOWPIECE_THRESHOLD) return WARPED_MESA;
                     return PAINTED_MOUNTAINS;
                 }
-                return steep ? BiomeClassifier.STONY_PEAKS : ROCKY_MOUNTAINS;
+                return steep ? STONY_PEAKS : ROCKY_MOUNTAINS;
             }
             if (wet == SUBHUMID) {
                 if (heat >= WARM) return steep ? STONY_SPIRES : TEMPERATE_HIGHLANDS;
@@ -464,10 +464,10 @@ public final class TerralithClassifier {
         }
 
         if (wet <= SEMIARID) {
-            if (steep) return zoneHeat >= WARM || broad > Q_MEDIAN ? BiomeClassifier.STONY_PEAKS : WINDSWEPT_SPIRES;
+            if (steep) return zoneHeat >= WARM || broad > Q_MEDIAN ? STONY_PEAKS : WINDSWEPT_SPIRES;
             return gentle ? HIGHLANDS : ROCKY_MOUNTAINS;
         }
-        if (gentle) return BiomeClassifier.MEADOW;
+        if (gentle) return MEADOW;
         if (steep) return WINDSWEPT_SPIRES;
         if (wet == WET) return HAZE_MOUNTAIN;
         return broad > Q_MEDIAN ? ROCKY_MOUNTAINS : HAZE_MOUNTAIN;
@@ -496,15 +496,15 @@ public final class TerralithClassifier {
                 }
             case TEMPERATE:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steep ? BiomeClassifier.WINDSWEPT_HILLS : dryRise(s);
-                    case SEMIARID: return steep ? BiomeClassifier.WINDSWEPT_HILLS : HIGHLANDS;
+                    case HYPERARID: case ARID: return steep ? WINDSWEPT_HILLS : dryRise(s);
+                    case SEMIARID: return steep ? WINDSWEPT_HILLS : HIGHLANDS;
                     case SUBHUMID: return steep ? STONY_SPIRES : TEMPERATE_HIGHLANDS;
                     case HUMID: return steep ? YOSEMITE_CLIFFS : FORESTED_HIGHLANDS;
                     default: return steep ? YOSEMITE_CLIFFS : HAZE_MOUNTAIN;
                 }
             default:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steep ? BiomeClassifier.WINDSWEPT_HILLS : dryRise(s);
+                    case HYPERARID: case ARID: return steep ? WINDSWEPT_HILLS : dryRise(s);
                     case SEMIARID: return steep ? WINDSWEPT_SPIRES : ALPINE_HIGHLANDS;
                     case SUBHUMID: return steep ? WINDSWEPT_SPIRES : ALPINE_HIGHLANDS;
                     case HUMID: return steep ? WINDSWEPT_SPIRES : broad > Q_MEDIAN ? SHIELD : FORESTED_HIGHLANDS;
@@ -527,14 +527,14 @@ public final class TerralithClassifier {
                 }
             case TEMPERATE:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steppe(s, BiomeClassifier.FOREST_SPARSE, Q_TOP_25);
-                    case SEMIARID: return broad > Q_MEDIAN ? BiomeClassifier.MEADOW : HIGHLANDS;
+                    case HYPERARID: case ARID: return steppe(s, FOREST_SPARSE, Q_TOP_25);
+                    case SEMIARID: return broad > Q_MEDIAN ? MEADOW : HIGHLANDS;
                     case SUBHUMID: return TEMPERATE_HIGHLANDS;
                     default: return FORESTED_HIGHLANDS;
                 }
             default:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steppe(s, BiomeClassifier.TAIGA_SPARSE, Q_TOP_25);
+                    case HYPERARID: case ARID: return steppe(s, TAIGA_SPARSE, Q_TOP_25);
                     case SEMIARID: return HIGHLANDS;
                     case SUBHUMID: return ALPINE_HIGHLANDS;
                     default: return broad > Q_MEDIAN ? SHIELD : FORESTED_HIGHLANDS;
@@ -547,14 +547,14 @@ public final class TerralithClassifier {
     }
 
     private static short dryRise(TerrainSample s) {
-        return v01(VARIANT_LOCAL, s) > Q_BOT_33 ? BiomeClassifier.WINDSWEPT_HILLS : STEPPE;
+        return v01(VARIANT_LOCAL, s) > Q_BOT_33 ? WINDSWEPT_HILLS : STEPPE;
     }
 
     private static short mesa(TerrainSample s) {
         if (v01(SHOWPIECE, s) > MESA_SHOWPIECE_THRESHOLD) {
             return v01(SHOWPIECE_PICK, s) < Q_MEDIAN ? WARPED_MESA : WHITE_MESA;
         }
-        return BiomeClassifier.BADLANDS;
+        return BADLANDS;
     }
 
     private static short valley(TerrainSample s, int heat, int wet) {
@@ -563,31 +563,31 @@ public final class TerralithClassifier {
             case TROPICAL:
                 switch (wet) {
                     case HYPERARID: case ARID: return SANDSTONE_VALLEY;
-                    case SEMIARID: return BiomeClassifier.SAVANNA;
+                    case SEMIARID: return SAVANNA;
                     case SUBHUMID: return BRUSHLAND;
-                    case HUMID: return BiomeClassifier.JUNGLE;
+                    case HUMID: return JUNGLE;
                     default: return flatLow ? ORCHID_SWAMP : TROPICAL_JUNGLE;
                 }
             case WARM:
                 switch (wet) {
                     case HYPERARID: case ARID: return SANDSTONE_VALLEY;
                     case SEMIARID: return BRUSHLAND;
-                    case SUBHUMID: return BiomeClassifier.FOREST_SPARSE;
-                    case HUMID: return BiomeClassifier.FOREST;
-                    default: return flatLow ? BiomeClassifier.SWAMP : BiomeClassifier.FOREST;
+                    case SUBHUMID: return FOREST_SPARSE;
+                    case HUMID: return FOREST;
+                    default: return flatLow ? SWAMP : FOREST;
                 }
             case TEMPERATE:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steppe(s, BiomeClassifier.FOREST_SPARSE, Q_MEDIAN);
+                    case HYPERARID: case ARID: return steppe(s, FOREST_SPARSE, Q_MEDIAN);
                     case SEMIARID: return VALLEY_CLEARING;
                     case SUBHUMID: return YOSEMITE_LOWLANDS;
                     default: return LUSH_VALLEY;
                 }
             default:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steppe(s, BiomeClassifier.TAIGA_SPARSE, Q_MEDIAN);
+                    case HYPERARID: case ARID: return steppe(s, TAIGA_SPARSE, Q_MEDIAN);
                     case SEMIARID: return VALLEY_CLEARING;
-                    case SUBHUMID: return BiomeClassifier.TAIGA_SPARSE;
+                    case SUBHUMID: return TAIGA_SPARSE;
                     default: return LUSH_VALLEY;
                 }
         }
@@ -599,39 +599,39 @@ public final class TerralithClassifier {
         switch (heat) {
             case TROPICAL:
                 switch (wet) {
-                    case HYPERARID: return broad > Q_TOP_20 ? ANCIENT_SANDS : BiomeClassifier.DESERT;
+                    case HYPERARID: return broad > Q_TOP_20 ? ANCIENT_SANDS : DESERT;
                     case ARID: return s.relElev + RELIEF_SPLIT_M * (broad - Q_MEDIAN) > 0f ? mesa(s) : LUSH_DESERT;
-                    case SEMIARID: return broad > Q_TOP_33 ? HOT_SHRUBLAND : BiomeClassifier.SAVANNA;
-                    case SUBHUMID: return broad > Q_MEDIAN ? BiomeClassifier.FOREST_SPARSE : BRUSHLAND;
-                    case HUMID: return BiomeClassifier.JUNGLE;
+                    case SEMIARID: return broad > Q_TOP_33 ? HOT_SHRUBLAND : SAVANNA;
+                    case SUBHUMID: return broad > Q_MEDIAN ? FOREST_SPARSE : BRUSHLAND;
+                    case HUMID: return JUNGLE;
                     default: return flatLow ? ORCHID_SWAMP : TROPICAL_JUNGLE;
                 }
             case WARM:
                 switch (wet) {
-                    case HYPERARID: return broad > Q_TOP_20 ? ANCIENT_SANDS : BiomeClassifier.DESERT;
+                    case HYPERARID: return broad > Q_TOP_20 ? ANCIENT_SANDS : DESERT;
                     case ARID: return SHRUBLAND;
                     case SEMIARID: return s.moist < SHRUB_EDGE_MOIST ? SHRUBLAND : BRUSHLAND;
-                    case SUBHUMID: return BiomeClassifier.FOREST_SPARSE;
-                    case HUMID: return BiomeClassifier.FOREST;
-                    default: return flatLow ? BiomeClassifier.SWAMP : BiomeClassifier.FOREST;
+                    case SUBHUMID: return FOREST_SPARSE;
+                    case HUMID: return FOREST;
+                    default: return flatLow ? SWAMP : FOREST;
                 }
             case TEMPERATE:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steppe(s, BiomeClassifier.FOREST_SPARSE, Q_TOP_25);
-                    case SEMIARID: return v01(VARIANT_LOCAL, s) > Q_TOP_25 ? BiomeClassifier.FOREST_SPARSE : broad > Q_MEDIAN ? BiomeClassifier.PLAINS : STEPPE;
-                    case SUBHUMID: return clearing(s) ? VALLEY_CLEARING : BiomeClassifier.FOREST_SPARSE;
-                    case HUMID: return BiomeClassifier.FOREST;
-                    default: return flatLow ? BiomeClassifier.SWAMP : YOSEMITE_LOWLANDS;
+                    case HYPERARID: case ARID: return steppe(s, FOREST_SPARSE, Q_TOP_25);
+                    case SEMIARID: return v01(VARIANT_LOCAL, s) > Q_TOP_25 ? FOREST_SPARSE : broad > Q_MEDIAN ? PLAINS : STEPPE;
+                    case SUBHUMID: return clearing(s) ? VALLEY_CLEARING : FOREST_SPARSE;
+                    case HUMID: return FOREST;
+                    default: return flatLow ? SWAMP : YOSEMITE_LOWLANDS;
                 }
             default:
                 switch (wet) {
-                    case HYPERARID: case ARID: return steppe(s, BiomeClassifier.TAIGA_SPARSE, Q_TOP_25);
+                    case HYPERARID: case ARID: return steppe(s, TAIGA_SPARSE, Q_TOP_25);
                     case SEMIARID: return broad > Q_MEDIAN ? HIGHLANDS : ALPINE_HIGHLANDS;
-                    case SUBHUMID: return broad > Q_TOP_33 ? BIRCH_TAIGA : BiomeClassifier.TAIGA_SPARSE;
+                    case SUBHUMID: return broad > Q_TOP_33 ? BIRCH_TAIGA : TAIGA_SPARSE;
                     case HUMID:
                         if (clearing(s)) return SHIELD_CLEARING;
                         if (broad > Q_TOP_33) return SHIELD;
-                        return broad < Q_BOT_33 ? BIRCH_TAIGA : BiomeClassifier.TAIGA;
+                        return broad < Q_BOT_33 ? BIRCH_TAIGA : TAIGA;
                     default: return SHIELD;
                 }
         }

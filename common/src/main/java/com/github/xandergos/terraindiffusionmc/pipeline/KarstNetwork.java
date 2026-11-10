@@ -6,15 +6,10 @@ public final class KarstNetwork {
     public static final byte ZONE_VADOSE = 1;
     public static final byte ZONE_KEYHOLE = 2;
     public static final byte ZONE_DOLINE = 3;
-    // A river reach whose water level runs below the ground: the stream goes underground
-    public static final byte ZONE_RIVER = 4;
-    // Swallow hole or resurgence, joining an underground reach up toward the surface
-    public static final byte ZONE_RIVER_SHAFT = 5;
 
     public static final float FAR = 4096f;
 
-    private static final float FLOOR_CUT =
-            Float.parseFloat(System.getProperty("terradiff.karstFloorCut", "0.35"));
+    private static final float FLOOR_CUT = 0.35f;
 
     public static final KarstNetwork EMPTY = new KarstNetwork();
 
@@ -24,7 +19,6 @@ public final class KarstNetwork {
     final float[] rh;
     final float[] rv;
     final byte[] zone;
-    final float[] riverY;
 
     final int cellSize;
     final int originX, originZ;
@@ -45,7 +39,6 @@ public final class KarstNetwork {
         this.loX = this.hiX = this.loY = this.hiY = this.loZ = this.hiZ = new float[0];
         this.rh = this.rv = new float[0];
         this.zone = new byte[0];
-        this.riverY = new float[0];
         this.cellSize = 1;
         this.originX = this.originZ = 0;
         this.nx = this.nz = 0;
@@ -60,7 +53,7 @@ public final class KarstNetwork {
 
     KarstNetwork(int count, float[] ax, float[] ay, float[] az,
                  float[] bx, float[] by, float[] bz,
-                 float[] rh, float[] rv, byte[] zone, float[] riverY,
+                 float[] rh, float[] rv, byte[] zone,
                  int cellSize, int originX, int originZ, int nx, int nz,
                  int wtOriginX, int wtOriginZ, int wtStep, int wtNX, int wtNZ, short[] wtY) {
         this.count = count;
@@ -68,7 +61,6 @@ public final class KarstNetwork {
         this.bx = bx; this.by = by; this.bz = bz;
         this.rh = rh; this.rv = rv;
         this.zone = zone;
-        this.riverY = riverY;
         this.cellSize = cellSize;
         this.originX = originX; this.originZ = originZ;
         this.nx = nx; this.nz = nz;
@@ -140,26 +132,13 @@ public final class KarstNetwork {
         return count == 0;
     }
 
-    public int segmentCount() {
-        return count;
-    }
-
-    // Signed distance to the nearest conduit wall in blocks; negative inside a conduit
-    public float density(float x, float y, float z) {
-        return density(x, y, z, false, FAR);
-    }
-
-    // Exact where the distance is below limit; otherwise some value at or above limit
+    // Signed distance to the nearest conduit wall in blocks, negative inside a conduit: exact where it is below
+    // limit, otherwise some value at or above limit
     public float density(float x, float y, float z, float limit) {
         return density(x, y, z, false, limit);
     }
 
-    // Distance considering only doline shafts
-    public float dolineDensity(float x, float y, float z) {
-        return density(x, y, z, true, FAR);
-    }
-
-    // Doline distance, exact below limit
+    // The same distance to doline shafts alone
     public float dolineDensity(float x, float y, float z, float limit) {
         return density(x, y, z, true, limit);
     }
@@ -174,48 +153,6 @@ public final class KarstNetwork {
         float out = Math.max(Math.max(loX[s] - x, x - hiX[s]), Math.max(loZ[s] - z, z - hiZ[s])) / rhs;
         float up = Math.max(loY[s] - y, y - hiY[s]) / rvs;
         return (Math.max(out, up) - 1f) * (rhs < rvs ? rhs : rvs);
-    }
-
-    // Distance considering only the river conduit itself
-    public float riverDensity(float x, float y, float z) {
-        return riverDensity(x, y, z, FAR);
-    }
-
-    // River conduit distance, exact below limit
-    public float riverDensity(float x, float y, float z, float limit) {
-        if (count == 0) return FAR;
-        int c = cellX(x);
-        int d = cellZ(z);
-        if (c < 0 || d < 0 || c >= nx || d >= nz) return FAR;
-        int cell = d * nx + c;
-        int from = cellStart[cell], to = cellStart[cell + 1];
-        float slack = slack(x, y, z);
-        float best = FAR;
-        for (int k = from; k < to; k++) {
-            int s = cellItems[k];
-            if (zone[s] != ZONE_RIVER) continue;
-            if (rh[s] > 0.01f && rv[s] > 0.01f
-                    && lowerBound(s, x, y, z, rh[s], rv[s]) > Math.min(best, limit) + slack) continue;
-            float ex = bx[s] - ax[s], ey = by[s] - ay[s], ez = bz[s] - az[s];
-            float len2 = ex * ex + ey * ey + ez * ez;
-            float t = 0f;
-            if (len2 > 1.0e-6f) {
-                t = ((x - ax[s]) * ex + (y - ay[s]) * ey + (z - az[s]) * ez) / len2;
-                if (t < 0f) t = 0f;
-                else if (t > 1f) t = 1f;
-            }
-            float qx = ax[s] + ex * t, qy = ay[s] + ey * t, qz = az[s] + ez * t;
-            float dx = x - qx, dy = y - qy, dz = z - qz;
-            float rhs = rh[s], rvs = rv[s];
-            if (rhs <= 0.01f || rvs <= 0.01f) continue;
-            float hh = (float) Math.sqrt(dx * dx + dz * dz) / rhs;
-            float vv = (dy < 0f ? -dy : dy) / rvs;
-            float n = (float) Math.sqrt(hh * hh + vv * vv);
-            float scale = rhs < rvs ? rhs : rvs;
-            float sd = (n - 1f) * scale;
-            if (sd < best) best = sd;
-        }
-        return best;
     }
 
     private float density(float x, float y, float z, boolean dolinesOnly, float limit) {
@@ -258,40 +195,6 @@ public final class KarstNetwork {
         return best;
     }
 
-    // Surface height of the underground river at this position, or Float#NEGATIVE_INFINITY where none
-    public float riverWaterY(float x, float y, float z) {
-        if (count == 0) return Float.NEGATIVE_INFINITY;
-        int c = cellX(x);
-        int d = cellZ(z);
-        if (c < 0 || d < 0 || c >= nx || d >= nz) return Float.NEGATIVE_INFINITY;
-        int cell = d * nx + c;
-        int from = cellStart[cell], to = cellStart[cell + 1];
-        if (from == to) return Float.NEGATIVE_INFINITY;
-
-        float best = Float.NEGATIVE_INFINITY;
-        float bestSd = Float.MAX_VALUE;
-        for (int k = from; k < to; k++) {
-            int s = cellItems[k];
-            if (zone[s] != ZONE_RIVER) continue;
-            float ex = bx[s] - ax[s], ey = by[s] - ay[s], ez = bz[s] - az[s];
-            float len2 = ex * ex + ey * ey + ez * ez;
-            float t = 0f;
-            if (len2 > 1.0e-6f) {
-                t = ((x - ax[s]) * ex + (y - ay[s]) * ey + (z - az[s]) * ez) / len2;
-                if (t < 0f) t = 0f;
-                else if (t > 1f) t = 1f;
-            }
-            float qx = ax[s] + ex * t, qz = az[s] + ez * t;
-            float dx = x - qx, dz = z - qz;
-            float sd = dx * dx + dz * dz;
-            if (sd < bestSd) {
-                bestSd = sd;
-                best = (ay[s] + ey * t) - riverY[s];
-            }
-        }
-        return best;
-    }
-
     // Water table height in blocks, bilinearly sampled
     public float waterTableY(float x, float z) {
         if (wtNX == 0) return Float.NEGATIVE_INFINITY;
@@ -305,31 +208,6 @@ public final class KarstNetwork {
         float a = wtY[z0 * wtNX + x0], b = wtY[z0 * wtNX + x1];
         float c = wtY[z1 * wtNX + x0], e = wtY[z1 * wtNX + x1];
         return (a + (b - a) * tx) + ((c + (e - c) * tx) - (a + (b - a) * tx)) * tz;
-    }
-
-    public String stats() {
-        if (count == 0) return "karst: empty";
-        int[] byZone = new int[4];
-        float rMin = Float.MAX_VALUE, rMax = 0f, rSum = 0f;
-        float yMin = Float.MAX_VALUE, yMax = -Float.MAX_VALUE;
-        double len = 0;
-        for (int s = 0; s < count; s++) {
-            byZone[zone[s]]++;
-            float r = rh[s];
-            if (r < rMin) rMin = r;
-            if (r > rMax) rMax = r;
-            rSum += r;
-            float lo = Math.min(ay[s], by[s]), hi = Math.max(ay[s], by[s]);
-            if (lo < yMin) yMin = lo;
-            if (hi > yMax) yMax = hi;
-            float dx = bx[s] - ax[s], dy = by[s] - ay[s], dz = bz[s] - az[s];
-            len += Math.sqrt(dx * dx + dy * dy + dz * dz);
-        }
-        return String.format(
-                "karst: %d segments, %.0f blocks total, y %.0f..%.0f, rh %.2f/%.2f/%.2f min/mean/max, "
-                        + "phreatic %d vadose %d keyhole %d doline %d, index %dx%d cell %d",
-                count, len, yMin, yMax, rMin, rSum / count, rMax,
-                byZone[0], byZone[1], byZone[2], byZone[3], nx, nz, cellSize);
     }
 
     private static int clamp(int v, int lo, int hi) {
