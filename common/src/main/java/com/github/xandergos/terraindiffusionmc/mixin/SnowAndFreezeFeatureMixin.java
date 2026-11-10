@@ -147,6 +147,10 @@ public abstract class SnowAndFreezeFeatureMixin {
             if (here.isAir() || here.is(BlockTags.LEAVES) || here.is(BlockTags.LOGS)) {
                 continue;
             }
+            // Snow does not settle on water or lava under a canopy
+            if (!here.getFluidState().isEmpty()) {
+                return;
+            }
 
             BlockPos target = cursor.above();
             if (!level.getBlockState(target).isAir()) {
@@ -174,20 +178,12 @@ public abstract class SnowAndFreezeFeatureMixin {
             return 1;
         }
 
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int tileShift = Integer.numberOfTrailingZeros(tileSize);
-        int blockStartX = (pos.getX() >> tileShift) << tileShift;
-        int blockStartZ = (pos.getZ() >> tileShift) << tileShift;
-
-        LocalTerrainProvider.HeightmapData data = LocalTerrainProvider.peekHeightmap(
-                blockStartZ, blockStartX, blockStartZ + tileSize, blockStartX + tileSize);
-        if (data == null || data.snowLayers == null) {
+        // Features run on chunks whose terrain was filled from this tile, unless it has since left the cache
+        LocalTerrainProvider.HeightmapData tile = LocalTerrainProvider.peekTileAt(pos.getX(), pos.getZ());
+        if (tile == null) {
             return 1;
         }
-
-        int localX = Math.max(0, Math.min(data.width - 1, pos.getX() - blockStartX));
-        int localZ = Math.max(0, Math.min(data.height - 1, pos.getZ() - blockStartZ));
-        int depth = data.snowLayers[localZ][localX];
+        int depth = tile.snowLayers[tile.index(pos.getX(), pos.getZ())];
         return Math.max(1, Math.min(2 * SnowLayerBlock.MAX_HEIGHT - 1, depth));
     }
 }

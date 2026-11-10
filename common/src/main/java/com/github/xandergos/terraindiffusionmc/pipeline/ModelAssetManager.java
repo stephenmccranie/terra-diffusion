@@ -8,6 +8,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
@@ -74,6 +75,26 @@ public final class ModelAssetManager {
                 throw new IllegalStateException("Failed to prepare terrain diffusion model assets", exception);
             }
         }
+    }
+
+    // Names the models on disk: the manifest's revision when they are checked against it, otherwise each file's
+    // size and time, since unchecked files may be anyone's
+    public static String identity() {
+        ModelAssetManifest manifest = loadManifest();
+        if (TerrainDiffusionConfig.validateModel()) {
+            return manifest.revision;
+        }
+        StringBuilder unchecked = new StringBuilder("unchecked");
+        for (String fileName : manifest.assets.keySet()) {
+            Path file = MODEL_DIRECTORY.resolve(fileName);
+            try {
+                unchecked.append(',').append(fileName).append('=').append(Files.size(file))
+                        .append('@').append(Files.getLastModifiedTime(file).toMillis());
+            } catch (IOException e) {
+                throw new UncheckedIOException("Model file unreadable: " + file, e);
+            }
+        }
+        return unchecked.toString();
     }
 
     // Returns the local path for an asset in the model directory

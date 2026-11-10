@@ -2,7 +2,6 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.FloatTensor;
-import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +19,7 @@ public final class SpawnSelector {
     public static BlockPos findSpawnBlockPos() {
         int initialSize = TerrainDiffusionConfig.spawnSearchInitialSize();
         int maxSize = TerrainDiffusionConfig.spawnSearchMaxSize();
-        int scale = WorldScaleManager.getCurrentScale();
+        int scale = LocalTerrainProvider.getInstance().scale;
 
         for (int regionSize = initialSize; regionSize <= maxSize; regionSize += 8) {
             int halfSize = regionSize / 2;
@@ -31,13 +30,7 @@ public final class SpawnSelector {
             int cj1 = halfSize;
 
             LOG.info("Querying coarse map to find spawn. Region size: {} x {}", regionSize, regionSize);
-            FloatTensor coarse;
-            try {
-                coarse = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
-            } catch (Exception e) {
-                LOG.error("SpawnSelector: failed to query coarse map at size {}", regionSize, e);
-                continue;
-            }
+            FloatTensor coarse = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
 
             int H = ci1 - ci0;
             int W = cj1 - cj0;
@@ -57,14 +50,8 @@ public final class SpawnSelector {
 
     // Returns the Minecraft block Y for the given block (X, Z), clamped to at least 64
     private static int heightmapY(int blockX, int blockZ) {
-        try {
-            LocalTerrainProvider.HeightmapData data =
-                    LocalTerrainProvider.getInstance().fetchHeightmap(blockZ, blockX, blockZ + 1, blockX + 1);
-            return Math.max(data.surfaceY[0], 64);
-        } catch (Exception e) {
-            LOG.error("SpawnSelector: failed to fetch heightmap at ({}, {})", blockX, blockZ, e);
-            return 64;
-        }
+        LocalTerrainProvider.HeightmapData tile = LocalTerrainProvider.tileAt(blockX, blockZ);
+        return Math.max(tile.surfaceY[tile.index(blockX, blockZ)], 64);
     }
 
     // Returns a spawn position at block (0, 0) using the heightmap Y, clamped to at least 64
@@ -95,7 +82,7 @@ public final class SpawnSelector {
                     // Need a 1-pixel border for neighbor checks
                     if (row < 1 || row >= H - 1 || col < 1 || col >= W - 1) continue;
 
-                    if (isFullyOnLand(coarse, row, col, H, W)) {
+                    if (isFullyOnLand(coarse, row, col, W)) {
                         // Convert local coarse index to absolute coarse coords
                         int ci = ci0 + row;
                         int cj = cj0 + col;
@@ -112,22 +99,17 @@ public final class SpawnSelector {
     }
 
     // Returns true if the pixel at (row, col) and all 8 of its neighbors have a positive unnormalized
-    private static boolean isFullyOnLand(FloatTensor coarse, int row, int col, int H, int W) {
+    private static boolean isFullyOnLand(FloatTensor coarse, int row, int col, int W) {
         for (int dr = -1; dr <= 1; dr++) {
             for (int dc = -1; dc <= 1; dc++) {
-                if (!isLand(coarse, row + dr, col + dc, H, W)) return false;
+                if (!isLand(coarse, row + dr, col + dc, W)) return false;
             }
         }
         return true;
     }
 
-    // A coarse pixel is considered land when its unnormalized channel-0 value is positive
-    private static boolean isLand(FloatTensor coarse, int row, int col, int H, int W) {
-        int pixelCount = H * W;
-        int px = row * W + col;
-        float weight = coarse.data[6 * pixelCount + px];
-        if (weight <= 1e-6f) return false;
-        float elevSqrt = coarse.data[px] / weight;  // channel 0
-        return elevSqrt > 0f;
+    // A coarse pixel is land where its elevation, channel 0, is positive
+    private static boolean isLand(FloatTensor coarse, int row, int col, int W) {
+        return coarse.data[row * W + col] > 0f;
     }
 }

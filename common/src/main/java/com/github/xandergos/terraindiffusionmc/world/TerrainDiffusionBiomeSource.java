@@ -4,6 +4,7 @@ import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.datafixers.util.Pair;
+import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
@@ -18,44 +19,64 @@ import net.minecraft.util.RandomSource;
 import net.minecraft.world.level.LevelReader;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.biome.BiomeSource;
-import net.minecraft.world.level.biome.Biomes;
 import net.minecraft.world.level.biome.Climate;
 
 import com.github.xandergos.terraindiffusionmc.pipeline.CaveBiomes;
-import com.github.xandergos.terraindiffusionmc.pipeline.TerralithBiomeIds;
+import com.github.xandergos.terraindiffusionmc.pipeline.Relief;
+import com.github.xandergos.terraindiffusionmc.pipeline.SurfaceBiomes;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithCompat;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.LinkedHashMap;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.function.Predicate;
 import java.util.stream.Stream;
 
-import static java.util.Map.entry;
-
 public class TerrainDiffusionBiomeSource extends BiomeSource {
-    private static final Logger LOG = LoggerFactory.getLogger(TerrainDiffusionBiomeSource.class);
+    public static final int MAX_SCALE = 6;
 
-    private static final ResourceKey<Biome> FOREST_SPARSE = ResourceKey.create(Registries.BIOME, ResourceLocation.fromNamespaceAndPath("terrain-diffusion-mc", "forest_sparse"));
-    private static final ResourceKey<Biome> TAIGA_SPARSE = ResourceKey.create(Registries.BIOME, ResourceLocation.fromNamespaceAndPath("terrain-diffusion-mc", "taiga_sparse"));
-    private static final ResourceKey<Biome> SNOWY_TAIGA_SPARSE = ResourceKey.create(Registries.BIOME, ResourceLocation.fromNamespaceAndPath("terrain-diffusion-mc", "snowy_taiga_sparse"));
+    private static final Codec<Relief> RELIEF_CODEC = RecordCodecBuilder.create(instance -> instance.group(
+            Codec.FLOAT.fieldOf("start").forGetter(Relief::start),
+            Codec.FLOAT.fieldOf("full").forGetter(Relief::full),
+            Codec.FLOAT.fieldOf("gain").forGetter(Relief::gain),
+            Codec.FLOAT.fieldOf("peaks").forGetter(Relief::peaks)
+    ).apply(instance, Relief::new));
 
-    public static final MapCodec<TerrainDiffusionBiomeSource> CODEC = RecordCodecBuilder.mapCodec((instance) ->
+    // With the seed, these two are the whole shape of a world, and they are saved with it: scale is how many
+    // blocks span one pixel of the model's 30 m grid, relief how the model's heights become the world's
+    public static final MapCodec<TerrainDiffusionBiomeSource> CODEC = RecordCodecBuilder.mapCodec(instance ->
             instance.group(
-                    RegistryOps.retrieveGetter(Registries.BIOME)
+                    RegistryOps.retrieveGetter(Registries.BIOME),
+                    Codec.intRange(1, MAX_SCALE).fieldOf("scale").forGetter(TerrainDiffusionBiomeSource::scale),
+                    RELIEF_CODEC.fieldOf("relief").forGetter(TerrainDiffusionBiomeSource::relief)
             ).apply(instance, instance.stable(TerrainDiffusionBiomeSource::new)));
 
-    private HolderGetter<Biome> biomeLookup;
-    private Map<Short, Holder<Biome>> biomeIdMap = null;
-    private Holder<Biome>[] caveBiomes = null;
-    private boolean caveTerralith = false;
+    private final HolderGetter<Biome> biomeLookup;
+    private final int scale;
+    private final Relief relief;
+    // By tile id and by CaveBiomes index; null where this world has no such biome
+    private Holder<Biome>[] surfaceBiomes;
+    private Holder<Biome>[] caveBiomes;
+    private boolean terralith;
 
-    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup) {
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, int scale, Relief relief) {
         this.biomeLookup = biomeLookup;
+        this.scale = scale;
+        this.relief = relief;
+    }
+
+    public int scale() {
+        return scale;
+    }
+
+    public Relief relief() {
+        return relief;
+    }
+
+    public TerrainDiffusionBiomeSource withScale(int scale) {
+        return new TerrainDiffusionBiomeSource(biomeLookup, scale, relief);
     }
 
     @Override
@@ -63,182 +84,106 @@ public class TerrainDiffusionBiomeSource extends BiomeSource {
         return CODEC;
     }
 
-    private void requireBiomeIdMap() {
-        if (biomeIdMap != null) {
-            return;
-        }
-
-        Map<Short, Holder<Biome>> biomes = new LinkedHashMap<>(Map.ofEntries(
-                    entry((short) 1, this.biomeLookup.getOrThrow(Biomes.PLAINS)),
-                    entry((short) 7, this.biomeLookup.getOrThrow(Biomes.RIVER)),
-                    entry((short) 11, this.biomeLookup.getOrThrow(Biomes.FROZEN_RIVER)),
-                    entry((short) 3, this.biomeLookup.getOrThrow(Biomes.SNOWY_PLAINS)),
-                    entry((short) 5, this.biomeLookup.getOrThrow(Biomes.DESERT)),
-                    entry((short) 6, this.biomeLookup.getOrThrow(Biomes.SWAMP)),
-                    entry((short) 8, this.biomeLookup.getOrThrow(Biomes.FOREST)),
-                    entry((short) 15, this.biomeLookup.getOrThrow(Biomes.TAIGA)),
-                    entry((short) 16, this.biomeLookup.getOrThrow(Biomes.SNOWY_TAIGA)),
-                    entry((short) 17, this.biomeLookup.getOrThrow(Biomes.SAVANNA)),
-                    entry((short) 19, this.biomeLookup.getOrThrow(Biomes.WINDSWEPT_HILLS)),
-                    entry((short) 23, this.biomeLookup.getOrThrow(Biomes.JUNGLE)),
-                    entry((short) 26, this.biomeLookup.getOrThrow(Biomes.BADLANDS)),
-                    entry((short) 29, this.biomeLookup.getOrThrow(Biomes.MEADOW)),
-                    entry((short) 31, this.biomeLookup.getOrThrow(Biomes.GROVE)),
-                    entry((short) 32, this.biomeLookup.getOrThrow(Biomes.SNOWY_SLOPES)),
-                    entry((short) 33, this.biomeLookup.getOrThrow(Biomes.FROZEN_PEAKS)),
-                    entry((short) 35, this.biomeLookup.getOrThrow(Biomes.STONY_PEAKS)),
-                    entry((short) 41, this.biomeLookup.getOrThrow(Biomes.WARM_OCEAN)),
-                    entry((short) 44, this.biomeLookup.getOrThrow(Biomes.OCEAN)),
-                    entry((short) 46, this.biomeLookup.getOrThrow(Biomes.COLD_OCEAN)),
-                    entry((short) 48, this.biomeLookup.getOrThrow(Biomes.FROZEN_OCEAN)),
-                    entry((short) 108, this.biomeLookup.getOrThrow(FOREST_SPARSE)),
-                    entry((short) 115, this.biomeLookup.getOrThrow(TAIGA_SPARSE)),
-                    entry((short) 116, this.biomeLookup.getOrThrow(SNOWY_TAIGA_SPARSE))
-        ));
-
-        addTerralithBiomes(biomes);
-        biomeIdMap = Map.copyOf(biomes);
-        resolveCaveBiomes();
+    private Optional<Holder.Reference<Biome>> find(String location) {
+        return biomeLookup.get(ResourceKey.create(Registries.BIOME, ResourceLocation.parse(location)));
     }
 
-    private void addTerralithBiomes(Map<Short, Holder<Biome>> biomes) {
-        Map<Short, String> paths = TerralithBiomeIds.paths();
-        Map<Short, Holder<Biome>> resolved = new LinkedHashMap<>();
-        List<String> missing = new ArrayList<>();
-
-        for (Map.Entry<Short, String> path : paths.entrySet()) {
-            ResourceKey<Biome> key = ResourceKey.create(Registries.BIOME,
-                    ResourceLocation.fromNamespaceAndPath(TerralithCompat.NAMESPACE, path.getValue()));
-            Optional<Holder.Reference<Biome>> holder = this.biomeLookup.get(key);
-            if (holder.isPresent()) {
-                resolved.put(path.getKey(), holder.get());
-            } else {
-                missing.add(path.getValue());
-            }
+    // Terralith's biomes are placed where it is installed and the config allows it. An install that lacks some of
+    // the biomes this mod places is a version this mod does not know.
+    private boolean resolveTerralith() {
+        List<String> found = new ArrayList<>(), missing = new ArrayList<>();
+        for (SurfaceBiomes.Entry biome : SurfaceBiomes.all()) {
+            if (biome.terralith()) (find(biome.location()).isPresent() ? found : missing).add(biome.location());
         }
-
-        SnowFreeBiomes.set(List.of());
-        if (resolved.isEmpty()) {
-            TerralithCompat.setActive(false);
-            return;
+        for (int i = 0; i < CaveBiomes.IDS.length; i++) {
+            if (CaveBiomes.isTerralith(i)) (find(CaveBiomes.IDS[i]).isPresent() ? found : missing).add(CaveBiomes.IDS[i]);
         }
-
+        if (found.isEmpty()) return false;
         if (!missing.isEmpty()) {
-            LOG.warn("Terralith is installed but {} of {} expected biomes are missing (first: {}); "
-                            + "keeping the vanilla biome palette",
-                    missing.size(), paths.size(), missing.get(0));
-            TerralithCompat.setActive(false);
-            return;
+            throw new IllegalStateException("Terralith is installed without " + missing.size()
+                    + " of the biomes Terrain Diffusion places, such as " + missing.get(0));
         }
-
-        if (!TerrainDiffusionConfig.terralithEnabled()) {
-            LOG.info("Terralith detected but terralith.enabled=false; keeping the vanilla biome palette");
-            TerralithCompat.setActive(false);
-            return;
-        }
-
-        biomes.putAll(resolved);
-        SnowFreeBiomes.set(List.of(resolved.get(TerralithBiomeIds.SCARLET_MOUNTAINS).value()));
-        TerralithCompat.setActive(true);
-        LOG.info("Terralith detected: added {} biomes to the terrain-diffusion palette", resolved.size());
+        return TerrainDiffusionConfig.terralithEnabled();
     }
 
     @SuppressWarnings("unchecked")
-    private void resolveCaveBiomes() {
-        boolean terralith = TerralithCompat.isActive();
-        Holder<Biome>[] out = new Holder[CaveBiomes.IDS.length];
-        List<String> missing = new ArrayList<>();
-
-        for (int i = 0; i < CaveBiomes.IDS.length; i++) {
-            if (CaveBiomes.isTerralith(i) && !terralith) continue;
-            ResourceLocation id = ResourceLocation.parse(CaveBiomes.IDS[i]);
-            Optional<Holder.Reference<Biome>> holder =
-                    this.biomeLookup.get(ResourceKey.create(Registries.BIOME, id));
-            if (holder.isPresent()) out[i] = holder.get();
-            else if (CaveBiomes.isTerralith(i)) missing.add(CaveBiomes.IDS[i]);
-            else throw new IllegalStateException("missing vanilla cave biome " + id);
+    private void resolveBiomes() {
+        if (surfaceBiomes != null) {
+            return;
         }
+        terralith = resolveTerralith();
+        TerralithCompat.setActive(terralith);
 
-        if (!missing.isEmpty()) {
-            LOG.warn("{} Terralith cave biomes are missing (first: {}); those slots fall back to the "
-                    + "vanilla cave palette", missing.size(), missing.get(0));
-            terralith = false;
-            for (int i = 3; i < out.length; i++) out[i] = null;
+        int size = 0;
+        for (SurfaceBiomes.Entry biome : SurfaceBiomes.all()) size = Math.max(size, biome.id() + 1);
+        Holder<Biome>[] surface = new Holder[size];
+        for (SurfaceBiomes.Entry biome : SurfaceBiomes.all()) {
+            if (terralith || !biome.terralith()) surface[biome.id()] = find(biome.location()).orElseThrow();
         }
-
-        this.caveBiomes = out;
-        this.caveTerralith = terralith;
-        LOG.info("Cave biomes active: {} entries (terralith={})",
-                java.util.Arrays.stream(out).filter(java.util.Objects::nonNull).count(), terralith);
+        Holder<Biome>[] caves = new Holder[CaveBiomes.IDS.length];
+        for (int i = 0; i < caves.length; i++) {
+            if (terralith || !CaveBiomes.isTerralith(i)) caves[i] = find(CaveBiomes.IDS[i]).orElseThrow();
+        }
+        caveBiomes = caves;
+        surfaceBiomes = surface;
     }
 
-    private Holder<Biome> caveBiomeAt(HeightmapData data, int localX, int localZ,
-                                      int worldX, int worldZ, int surfaceY, int blockY) {
-        if (caveBiomes == null || data.climateT == null) return null;
-        float depth = CaveBiomes.depthAt(surfaceY, blockY);
+    private Holder<Biome> caveBiomeAt(HeightmapData data, int column, int worldX, int worldZ, int blockY) {
+        float depth = CaveBiomes.depthAt(data.surfaceY[column], blockY);
         if (depth < CaveBiomes.MIN_DEPTH) return null;
-        float t = CaveBiomes.jitterTemp(data.climateT[localZ][localX] / 127f, worldX, worldZ);
-        float h = CaveBiomes.jitterHumidity(data.climateH[localZ][localX] / 127f, worldX, worldZ);
-        float e = CaveBiomes.jitterErosion(data.climateE[localZ][localX] / 127f, worldX, worldZ);
-        float c = CaveBiomes.continentalnessAt(data.heightmap[localZ][localX]);
+        float t = CaveBiomes.jitterTemp(data.climateT[column] / 127f, worldX, worldZ);
+        float h = CaveBiomes.jitterHumidity(data.climateH[column] / 127f, worldX, worldZ);
+        float e = CaveBiomes.jitterErosion(data.climateE[column] / 127f, worldX, worldZ);
+        float c = CaveBiomes.continentalnessAt(data.groundM[column]);
         float w = CaveBiomes.weirdnessAt(worldX, worldZ);
-        int idx = CaveBiomes.select(t, h, c, e, w, depth, caveTerralith);
+        int idx = CaveBiomes.select(t, h, c, e, w, depth, terralith);
         return idx == CaveBiomes.NONE ? null : caveBiomes[idx];
     }
 
     @Override
     protected Stream<Holder<Biome>> collectPossibleBiomes() {
-        requireBiomeIdMap();
-        return Stream.concat(biomeIdMap.values().stream(),
-                java.util.Arrays.stream(caveBiomes).filter(java.util.Objects::nonNull)).distinct();
+        resolveBiomes();
+        return Stream.concat(Arrays.stream(surfaceBiomes), Arrays.stream(caveBiomes))
+                .filter(Objects::nonNull).distinct();
     }
 
     @Override
     public Holder<Biome> getNoiseBiome(int x, int y, int z, Climate.Sampler noise) {
-        requireBiomeIdMap();
-        Holder<Biome> found = biomeAt(x, y, z, true);
-        return found != null ? found : biomeIdMap.get((short) 1);
+        resolveBiomes();
+        return biomeAt(x, y, z, true);
     }
 
-    // hundreds of scattered positions would run the model once per position
+    // The biome at a quart position. A search asks only tiles that are already built (generate false) and gets
+    // null elsewhere: hundreds of scattered positions would run the model once per position
     private Holder<Biome> biomeAt(int x, int y, int z, boolean generate) {
-        // x, y, z are in quart coordinates (block / 4)
         int blockX = QuartPos.toBlock(x);
         int blockZ = QuartPos.toBlock(z);
 
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-        int blockStartX = (blockX >> tileShift) << tileShift;
-        int blockStartZ = (blockZ >> tileShift) << tileShift;
-        int blockEndX = blockStartX + tileSize;
-        int blockEndZ = blockStartZ + tileSize;
-
         HeightmapData data = generate
-                ? LocalTerrainProvider.getInstance()
-                        .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX)
-                : LocalTerrainProvider.peekHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
-        if (data == null || data.biomeIds == null) return null;
+                ? LocalTerrainProvider.tileAt(blockX, blockZ)
+                : LocalTerrainProvider.peekTileAt(blockX, blockZ);
+        if (data == null) return null;
 
-        int localX = Math.max(0, Math.min(data.width  - 1, blockX - blockStartX));
-        int localZ = Math.max(0, Math.min(data.height - 1, blockZ - blockStartZ));
-
-        int surfaceY = data.surfaceY[localZ * data.width + localX];
-        Holder<Biome> cave = caveBiomeAt(data, localX, localZ, blockX, blockZ,
-                surfaceY, QuartPos.toBlock(y));
+        int column = data.index(blockX, blockZ);
+        Holder<Biome> cave = caveBiomeAt(data, column, blockX, blockZ, QuartPos.toBlock(y));
         if (cave != null) return cave;
 
-        return biomeIdMap.get(data.biomeIds[localZ][localX]);
+        short id = data.biomeIds[column];
+        Holder<Biome> biome = surfaceBiomes[id];
+        if (biome == null) {
+            throw new IllegalStateException("A tile carries " + SurfaceBiomes.of(id).location()
+                    + ", which this world does not have");
+        }
+        return biome;
     }
 
-    private static final int MAX_SAMPLES =
-            Integer.parseInt(System.getProperty("terradiff.biomeSearchSamples", "40000"));
+    private static final int MAX_SAMPLES = 40000;
 
     // Rings outward in quart space, sweeping vertically
     private Pair<BlockPos, Holder<Biome>> search(int x, int minY, int maxY, int z, int radius,
                                                  int horizontalInterval, int verticalInterval,
                                                  Predicate<Holder<Biome>> predicate) {
-        requireBiomeIdMap();
+        resolveBiomes();
         int qx = QuartPos.fromBlock(x);
         int qz = QuartPos.fromBlock(z);
         int qRadius = Math.max(0, QuartPos.fromBlock(radius));

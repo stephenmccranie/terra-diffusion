@@ -9,15 +9,15 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** A Terrain Diffusion chunk starting to tick lets its still water spill over steps and falls; see {@link TerrainWater#spillStillWater}. */
+/** A Terrain Diffusion chunk starting to tick lets water hanging over caves pour in; see {@link TerrainWater#spillIntoCaves}. */
 @Mixin(LevelChunk.class)
 public abstract class LevelChunkSpillMixin {
     @Inject(method = "postProcessGeneration", at = @At("TAIL"))
-    private void terrainDiffusion$spillStillWater(CallbackInfo ci) {
+    private void terrainDiffusion$spillIntoCaves(CallbackInfo ci) {
         LevelChunk chunk = (LevelChunk) (Object) this;
         if (chunk.getLevel() instanceof ServerLevel server
                 && server.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource) {
-            TerrainWater.spillStillWater(chunk);
+            TerrainWater.spillIntoCaves(chunk);
         }
     }
 }

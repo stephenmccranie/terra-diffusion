@@ -1,39 +1,24 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
-import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipelineModelConfig;
-
-public class HeightConverter {
+// Where a height in metres falls among a world's blocks
+public final class HeightConverter {
     public static final int SEA_LEVEL = 63;
-    private static final short MAX_PIPELINE_METERS = 10_000;
 
+    // The sea floor is squeezed so that no depth reaches this many blocks below sea level
     private static final float MAX_OCEAN_DEPTH_BLOCKS = 196f;
 
-    private static float getResolutionForScale(int configuredScale) {
-        return WorldPipelineModelConfig.nativeResolution() / WorldScaleManager.clampScale(configuredScale);
+    private HeightConverter() {
     }
 
-    public static int convertToMinecraftHeight(short meters) {
-        return convertToMinecraftHeight(meters, WorldScaleManager.getCurrentScale());
-    }
-
-    public static int convertToMinecraftHeight(short meters, int configuredScale) {
-        int baseY;
-        float resolution = getResolutionForScale(configuredScale);
-
-        if (meters >= 0) {
-            baseY = (int) (meters / resolution);
-        } else {
-            float depthBlocks = Math.abs((float) meters) / resolution;
-            float limitedDepth = MAX_OCEAN_DEPTH_BLOCKS * depthBlocks
-                    / (depthBlocks + MAX_OCEAN_DEPTH_BLOCKS);
-            baseY = -((int) limitedDepth) - 1;
+    // The Y of the block holding a height of metres above sea level, in a world whose blocks stand for blockM
+    // metres. Heights count in whole metres.
+    public static int toY(float metres, float blockM) {
+        float whole = (float) Math.floor(metres);
+        if (whole >= 0f) {
+            return (int) (whole / blockM) + SEA_LEVEL;
         }
-
-        return baseY + SEA_LEVEL;
-    }
-
-    // Returns the highest generated block Y expected from pipeline output for a given scale
-    public static int getMaxGeneratedYForScale(int configuredScale) {
-        return convertToMinecraftHeight(MAX_PIPELINE_METERS, configuredScale);
+        float depthBlocks = -whole / blockM;
+        float squeezed = MAX_OCEAN_DEPTH_BLOCKS * depthBlocks / (depthBlocks + MAX_OCEAN_DEPTH_BLOCKS);
+        return -((int) squeezed) - 1 + SEA_LEVEL;
     }
 }

@@ -183,9 +183,6 @@ public final class RiverHydrology {
 
     public static KarstNetwork karstAt(WorldPipeline pipeline, float nativeI, float nativeJ,
                                       float blockM) {
-        if (!KarstHydrology.ENABLED) {
-            return KarstNetwork.EMPTY;
-        }
         int ri = Math.floorDiv((int) Math.floor(nativeI), REGION_PX);
         int rj = Math.floorDiv((int) Math.floor(nativeJ), REGION_PX);
         Region region = regionFor(pipeline, ri, rj, blockM);
@@ -498,13 +495,13 @@ public final class RiverHydrology {
         }
     }
 
-    private static long pack(float key, int index) {
+    static long pack(float key, int index) {
         int bits = Float.floatToIntBits(key);
         bits ^= (bits >> 31) & 0x7FFFFFFF;
         return (((long) bits) << 32) | (index & 0xFFFFFFFFL);
     }
 
-    private static final class LongHeap {
+    static final class LongHeap {
         private long[] heap;
         private int size;
 
@@ -676,7 +673,7 @@ public final class RiverHydrology {
 
         InfiniteTensor.throwIfCancelled();
         KarstNetwork karst = KarstHydrology.solve(regionI, regionJ, windowI, windowJ, GRID,
-                elev, acc, channel, fillDepth, level, lake, width, down, REGION_PX, MARGIN_PX, blockM);
+                elev, acc, channel, fillDepth, level, lake, REGION_PX, MARGIN_PX, blockM);
         InfiniteTensor.throwIfCancelled();
         return new Region(regionI, regionJ, traced, crop(lake), crop(lakeDeep), karst, blockM);
     }
@@ -1013,10 +1010,8 @@ public final class RiverHydrology {
         int cn = ch * cw;
         float[][] cell = new float[2][cn];
         for (int k = 0; k < cn; k++) {
-            float weight = coarse.data[6 * cn + k];
-            if (weight <= 1e-6f) continue;
-            double rain = Math.max(0f, coarse.data[4 * cn + k] / weight);
-            double evaporation = 58.93 * Math.max(0f, coarse.data[2 * cn + k] / weight);
+            double rain = Math.max(0f, coarse.data[4 * cn + k]);
+            double evaporation = 58.93 * Math.max(0f, coarse.data[2 * cn + k]);
             double aridity = evaporation / Math.max(1.0, rain);
             cell[0][k] = (float) (rain * (Math.pow(1 + Math.pow(aridity, 2.6), 1 / 2.6) - aridity)
                     / REFERENCE_RUNOFF_MM);
@@ -1057,7 +1052,7 @@ public final class RiverHydrology {
         float[] runoff = waterBalance(pipeline, li0 * lc, lj0 * lc, cg, lc)[0];
         for (int k = 0; k < cn; k++) {
             float m = Math.signum(height[k]) * height[k] * height[k];
-            height[k] = WorldPipeline.RELIEF.apply(m, m);
+            height[k] = pipeline.relief.apply(m, m);
         }
 
         // Priority flood from the coarse map's edge and the sea; each cell drains to the cell it was reached

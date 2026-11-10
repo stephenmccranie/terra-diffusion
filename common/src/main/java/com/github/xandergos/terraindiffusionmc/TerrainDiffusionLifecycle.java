@@ -11,9 +11,7 @@ import com.github.xandergos.terraindiffusionmc.world.DeepOres;
 import com.github.xandergos.terraindiffusionmc.world.TfmgCompat;
 import com.github.xandergos.terraindiffusionmc.world.TerralithSnow;
 import com.github.xandergos.terraindiffusionmc.world.TerralithSurfaceRules;
-import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ScaleAwareStructureState;
-import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -24,10 +22,10 @@ import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.storage.LevelResource;
-import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipeline;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.levelgen.DensityFunction;
+import net.minecraft.world.level.levelgen.NoiseBasedChunkGenerator;
 import net.minecraft.world.level.levelgen.feature.Feature;
 import com.mojang.serialization.MapCodec;
 import org.slf4j.Logger;
@@ -78,8 +76,6 @@ public final class TerrainDiffusionLifecycle {
                 TfmgCompat.OIL_DEPOSIT);
         registrar.register(ResourceLocation.fromNamespaceAndPath(MOD_ID, "tfmg_oil_well"),
                 TfmgCompat.OIL_WELL);
-        registrar.register(ResourceLocation.fromNamespaceAndPath(MOD_ID, "scarlet_snow_gate"),
-                TerralithSnow.SCARLET_SNOW_GATE);
     }
 
     @FunctionalInterface
@@ -87,31 +83,23 @@ public final class TerrainDiffusionLifecycle {
         void register(ResourceLocation id, T value);
     }
 
-    // Called by each loader when the server is starting
-    public static void onServerStarting() {
-        LocalTerrainProvider.clearCache();
-    }
-
-    // Called by each loader when a server level is loaded
+    // Called by each loader when a server level is loaded. A Terrain Diffusion world is an overworld generated
+    // from the mod's biome source; nothing here touches any other world.
     public static void onWorldLoad(ServerLevel world) {
-        if (world.dimension() == Level.OVERWORLD) {
-            WorldScaleManager.initializeForWorld(world);
-            if (world.getChunkSource().getGenerator().getBiomeSource() instanceof TerrainDiffusionBiomeSource) {
-                var worldSettings = WorldScaleManager.settingsForWorld(world);
-                boolean scaleSpacing = TerrainDiffusionConfig.scaleStructureSpacing(worldSettings.scaleStructureSpacing());
-                worldSettings.setScaleStructureSpacing(scaleSpacing);
-                if (scaleSpacing) {
-                    ((ScaleAwareStructureState) world.getChunkSource().getGeneratorState())
-                            .terrainDiffusion$configureStructureScale(WorldScaleManager.getCurrentScale(), world.registryAccess());
-                }
-            }
-            WorldPipeline.setCacheRoot(world.getServer().getWorldPath(LevelResource.ROOT));
-            LocalTerrainProvider.init(world.getSeed());
-            TerralithSurfaceRules.apply(world);
-            TerralithSnow.apply(world);
-            DeepOres.apply(world);
-            TfmgCompat.apply(world);
+        if (world.dimension() != Level.OVERWORLD
+                || !(world.getChunkSource().getGenerator() instanceof NoiseBasedChunkGenerator generator)
+                || !(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource terrain)) {
+            return;
         }
+        ((ScaleAwareStructureState) world.getChunkSource().getGeneratorState())
+                .terrainDiffusion$configureStructureScale(terrain.scale(), world.registryAccess());
+        LocalTerrainProvider.init(world.getSeed(), terrain.scale(), terrain.relief(),
+                world.getServer().getWorldPath(LevelResource.ROOT));
+        TerralithSurfaceRules.apply(world);
+        TerralithSnow.apply(world);
+        DeepOres.apply(world);
+        TfmgCompat.apply(world);
+        TerrainDiffusionDensityFunction.of(generator.generatorSettings().value());
     }
 
     // Called by each loader when the server is stopping

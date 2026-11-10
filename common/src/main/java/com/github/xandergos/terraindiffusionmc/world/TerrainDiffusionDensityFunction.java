@@ -1,38 +1,52 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
-import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.DeepCaverns;
-import com.github.xandergos.terraindiffusionmc.pipeline.KarstNetwork;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.util.KeyDispatchDataCodec;
 import net.minecraft.world.level.levelgen.DensityFunction;
+import net.minecraft.world.level.levelgen.DensityFunctions;
+import net.minecraft.world.level.levelgen.NoiseGeneratorSettings;
 
-public class TerrainDiffusionDensityFunction implements DensityFunction {
+public class TerrainDiffusionDensityFunction implements DensityFunction.SimpleFunction {
     public static final MapCodec<TerrainDiffusionDensityFunction> CODEC =
             RecordCodecBuilder.mapCodec(instance -> instance.group(
                     Codec.BOOL.optionalFieldOf("caves", Boolean.TRUE).forGetter(f -> f.caves)
             ).apply(instance, TerrainDiffusionDensityFunction::new));
 
-    private static final int CAVE_ROOF =
-            Integer.parseInt(System.getProperty("terradiff.caveRoof", "5"));
+    // Blocks of ground a cave keeps over it and beside it; under the sea floor, and over a deep cavern, more
+    private static final int CAVE_ROOF = 5;
+    private static final int SEA_FLOOR_ROOF = 8;
+    private static final int DEEP_CLEARANCE = 8;
 
-    private static final int DEEP_CLEARANCE =
-            Integer.parseInt(System.getProperty("terradiff.deepClearance", "8"));
-
-    private static final int SEA_FLOOR_ROOF =
-            Integer.parseInt(System.getProperty("terradiff.seaFloorRoof", "8"));
-
-    private static boolean nearRiverWater(HeightmapData data, int localX, int localZ, int y) {
-        int i = localZ * data.width + localX;
-        return y >= data.riverWallLow[i] && y <= data.riverWallHigh[i];
+    // The terrain-diffusion density a final density is, through holders and cache markers; null if it is
+    // anything else
+    public static TerrainDiffusionDensityFunction unwrap(DensityFunction density) {
+        while (true) {
+            if (density instanceof DensityFunctions.HolderHolder holder) {
+                density = holder.function().value();
+            } else if (density instanceof DensityFunctions.MarkerOrMarked marker) {
+                density = marker.wrapped();
+            } else {
+                return density instanceof TerrainDiffusionDensityFunction terrain ? terrain : null;
+            }
+        }
     }
 
-    public static final TerrainDiffusionDensityFunction INSTANCE =
-            new TerrainDiffusionDensityFunction(Boolean.TRUE);
+    // The density a terrain-diffusion world generates from. Its noise settings are the mod's own: this density
+    // alone as the final density, with no aquifers or ore veins, so each block is solid, the fluid picker's fluid
+    // or air, and a chunk can be filled a column at a time
+    public static TerrainDiffusionDensityFunction of(NoiseGeneratorSettings settings) {
+        TerrainDiffusionDensityFunction terrain = unwrap(settings.noiseRouter().finalDensity());
+        if (terrain == null || settings.isAquifersEnabled() || settings.oreVeinsEnabled()) {
+            throw new IllegalStateException("A Terrain Diffusion world must use the mod's noise settings: its own "
+                    + "density as the final density, with aquifers and ore veins off");
+        }
+        return terrain;
+    }
 
     private final boolean caves;
 
@@ -42,127 +56,37 @@ public class TerrainDiffusionDensityFunction implements DensityFunction {
 
     @Override
     public double compute(DensityFunction.FunctionContext pos) {
-        int x = pos.blockX();
-        int z = pos.blockZ();
-        int y = pos.blockY();
-
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-        int tileX = x >> tileShift;
-        int tileZ = z >> tileShift;
-
-        int blockStartX = tileX << tileShift;
-        int blockStartZ = tileZ << tileShift;
-
-        int blockEndX = blockStartX + tileSize;
-        int blockEndZ = blockStartZ + tileSize;
-
-        HeightmapData data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
-
-        if (data == null || data.heightmap == null) {
-            return 0.0;
-        }
-
-        int localX = Math.max(0, Math.min(data.width - 1, x - blockStartX));
-        int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
-        return density(data, x, y, z, localX, localZ);
+        int x = pos.blockX(), z = pos.blockZ();
+        return density(LocalTerrainProvider.tileAt(x, z), x, pos.blockY(), z);
     }
 
-    // The density at a block, from the heightmap tile holding its column at (localX, localZ): height above the
-    // block, with caves carved out of the ground
-    public double density(HeightmapData data, int x, int y, int z, int localX, int localZ) {
-        int column = localZ * data.width + localX;
-        int targetHeight = data.surfaceY[column];
-        double terrain = targetHeight - y;
-        if (!caves || terrain <= 0.0) {
-            return terrain;
+    // The density at a block of a column in the tile data: the ground's height above the block, with caves
+    // carved out of it
+    public double density(HeightmapData data, int x, int y, int z) {
+        int column = data.index(x, z);
+        int ground = data.surfaceY[column];
+        double best = ground - y;
+        if (!caves || best <= 0.0) {
+            return best;
         }
-        return carve(data, x, y, z, terrain, targetHeight, data.sideSurface[column] - y, localX, localZ);
-    }
-
-    private static final class FillContext {
-        int blockStartX, blockStartZ, blockEndX, blockEndZ;
-        HeightmapData data;
-
-        void update(int x, int z) {
-            if (x < blockStartX || x >= blockEndX) this.init(x, z);
-            if (z < blockStartZ || z >= blockEndZ) this.init(x, z);
-        }
-
-        void init(int x, int z) {
-            int tileSize = TerrainDiffusionConfig.tileSize();
-            int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-            int tileX = x >> tileShift;
-            int tileZ = z >> tileShift;
-
-            this.blockStartX = tileX << tileShift;
-            this.blockStartZ = tileZ << tileShift;
-            this.blockEndX = blockStartX + tileSize;
-            this.blockEndZ = blockStartZ + tileSize;
-
-            this.data = LocalTerrainProvider.getInstance()
-                .fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
-        }
-    }
-
-    @Override
-    public void fillArray(double[] densities, DensityFunction.ContextProvider applier) {
-        if (densities.length == 0) return;
-
-        FillContext ctx = new FillContext();
-        DensityFunction.FunctionContext pos = applier.forIndex(0);
-        int x = pos.blockX();
-        int z = pos.blockZ();
-        int y = pos.blockY();
-        ctx.init(x, z);
-
-        for (int i = 0; i < densities.length; i++) {
-            pos = applier.forIndex(i);
-            x = pos.blockX();
-            z = pos.blockZ();
-            y = pos.blockY();
-            ctx.update(x, z);
-
-            HeightmapData data = ctx.data;
-            if (data == null || data.heightmap == null) {
-                densities[i] = -y;
-                continue;
-            }
-
-            int localX = Math.max(0, Math.min(data.width  - 1, x - ctx.blockStartX));
-            int localZ = Math.max(0, Math.min(data.height - 1, z - ctx.blockStartZ));
-            densities[i] = density(data, x, y, z, localX, localZ);
-        }
-    }
-
-    private static double carve(HeightmapData data, int x, int y, int z,
-                                double terrain, int targetHeight, double sideDepth,
-                                int localX, int localZ) {
-        double best = terrain;
-        boolean underSea = targetHeight <= HeightConverter.SEA_LEVEL;
-        int roof = underSea ? Math.max(CAVE_ROOF, SEA_FLOOR_ROOF) : CAVE_ROOF;
-        boolean shallow = terrain < roof || sideDepth < roof;
-        KarstNetwork karst = data.karst;
-        if (karst != null && !karst.isEmpty() && !(shallow && underSea)) {
-            float cave = shallow ? karst.dolineDensity(x, y, z, (float) best) : karst.density(x, y, z, (float) best);
+        boolean underSea = ground <= HeightConverter.SEA_LEVEL;
+        int roof = underSea ? SEA_FLOOR_ROOF : CAVE_ROOF;
+        boolean shallow = best < roof || data.sideSurface[column] - y < roof;
+        // Near the surface only doline shafts open, and none under the sea
+        if (!(shallow && underSea)) {
+            float cave = shallow
+                    ? data.karst.dolineDensity(x, y, z, (float) best)
+                    : data.karst.density(x, y, z, (float) best);
             if (cave < best) best = cave;
         }
-        int deepClear = underSea ? Math.max(DEEP_CLEARANCE, SEA_FLOOR_ROOF) : DEEP_CLEARANCE;
-        if (!shallow && y <= DeepCaverns.TOP && y < targetHeight - deepClear) {
+        if (!shallow && y <= DeepCaverns.TOP && y < ground - DEEP_CLEARANCE) {
             float deep = DeepCaverns.density(x, y, z);
             if (deep < best) best = deep;
         }
+        // A cave stays shut where it would open the side of a pool or come within reach of river water
         if (best < 0.0 && (TerrainWater.rimSolid(x, y, z)
-                || nearRiverWater(data, localX, localZ, y))) return -best;
+                || (y >= data.riverWallLow[column] && y <= data.riverWallHigh[column]))) return -best;
         return best;
-    }
-
-    @Override
-    public DensityFunction mapAll(DensityFunction.Visitor visitor) {
-        return visitor.apply(this);
     }
 
     @Override

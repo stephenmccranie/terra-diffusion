@@ -28,8 +28,6 @@ public final class EDMScheduler {
 
     // Sigmas array (numSteps + 1 entries, last entry is 0)
     public final float[] sigmas;
-    // Timesteps array (c_noise = 0.25 * log(sigma)), same length as numSteps
-    public final float[] timesteps;
     private final int numSteps;
 
     // State for DPM-Solver++ multi-step
@@ -40,10 +38,6 @@ public final class EDMScheduler {
     public EDMScheduler(int numSteps) {
         this.numSteps = numSteps;
         this.sigmas = computeKarrasSignas(numSteps);
-        this.timesteps = new float[numSteps];
-        for (int i = 0; i < numSteps; i++) {
-            timesteps[i] = 0.25f * (float) Math.log(sigmas[i]);
-        }
         reset();
     }
 

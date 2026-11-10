@@ -12,14 +12,9 @@ public final class BoundedBeardifier extends Beardifier {
     private static final int INFLUENCE_RADIUS = 12;
     private final long minX, minY, minZ, maxX, maxY, maxZ;
 
-    public static Beardifier wrap(Beardifier original) {
-        if (original.getClass() != Beardifier.class) return original;
+    public static BoundedBeardifier of(Beardifier original) {
         var access = (BeardifierAccessor) original;
-        var pieces = access.terrainDiffusion$pieces();
-        var junctions = access.terrainDiffusion$junctions();
-        // The vanilla factory starts at zero. Preserve unusual third-party iterator state.
-        if (pieces.nextIndex() != 0 || junctions.nextIndex() != 0) return original;
-        return new BoundedBeardifier(pieces, junctions);
+        return new BoundedBeardifier(access.terrainDiffusion$pieces(), access.terrainDiffusion$junctions());
     }
 
     public BoundedBeardifier(ObjectListIterator<Rigid> pieces, ObjectListIterator<JigsawJunction> junctions) {

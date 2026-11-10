@@ -33,10 +33,6 @@ public class FloatTensor {
         return s;
     }
 
-    public int ndim() {
-        return shape.length;
-    }
-
     public long byteSize() {
         return (long) data.length * Float.BYTES;
     }
@@ -66,21 +62,18 @@ public class FloatTensor {
         }
     }
 
-    // Extract a contiguous sub-region as a new zero-based tensor
-    public FloatTensor slice(int[][] region) {
-        int n = shape.length;
-        int[] newShape = new int[n];
-        for (int d = 0; d < n; d++) {
-            newShape[d] = region[d][1] - region[d][0];
+    // An overlap-added [C + 1, H, W] tensor holds its windows' weighted sums and, in the last channel, the weight
+    // they summed at each pixel. This is its C blended channels.
+    public FloatTensor blended() {
+        int channels = shape[0] - 1, n = shape[1] * shape[2];
+        FloatTensor out = new FloatTensor(new int[]{channels, shape[1], shape[2]});
+        for (int px = 0; px < n; px++) {
+            float weight = data[channels * n + px];
+            if (weight > 1e-6f) {
+                for (int ch = 0; ch < channels; ch++) out.data[ch * n + px] = data[ch * n + px] / weight;
+            }
         }
-        FloatTensor result = new FloatTensor(newShape);
-        int[][] dstRegion = new int[n][2];
-        for (int d = 0; d < n; d++) {
-            dstRegion[d][0] = 0;
-            dstRegion[d][1] = newShape[d];
-        }
-        result.addFrom(this, dstRegion, region);
-        return result;
+        return out;
     }
 
     @Override

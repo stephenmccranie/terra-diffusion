@@ -1,19 +1,13 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import static com.github.xandergos.terraindiffusionmc.pipeline.SurfaceBiomes.*;
+
 // Rule-based biome classifier port of _classify_biome in minecraft_api.py
 public final class BiomeClassifier {
-    // Fixed-seed noise instances (matching Python's module-level _TEMP_NOISE etc.)
-    private static final FastNoiseLite TEMP_NOISE, TEMP_NOISE_FINE;
-    private static final FastNoiseLite PRECIP_NOISE;
-    private static final FastNoiseLite SNOW_NOISE, SNOW_NOISE_FINE;
-
-    static {
-        TEMP_NOISE = makeFnl(12345, 1f/500f, 3, 2f, 0.5f);
-        TEMP_NOISE_FINE = makeFnl(54321, 1f/128f, 2, 2f, 0.5f);
-        PRECIP_NOISE = makeFnl(12345, 1f/500f, 5, 2f, 0.5f);
-        SNOW_NOISE = makeFnl(12345, 1f/500f, 3, 2f, 0.5f);
-        SNOW_NOISE_FINE = makeFnl(54321, 1f/128f, 2, 2f, 0.5f);
-    }
+    // One coarse and one fine field vary both the temperature and the snow line; precipitation has its own
+    private static final FastNoiseLite COARSE_NOISE = makeFnl(12345, 1f/500f, 3, 2f, 0.5f);
+    private static final FastNoiseLite FINE_NOISE = makeFnl(54321, 1f/128f, 2, 2f, 0.5f);
+    private static final FastNoiseLite PRECIP_NOISE = makeFnl(12345, 1f/500f, 5, 2f, 0.5f);
 
     private static FastNoiseLite makeFnl(int seed, float freq, int oct, float lac, float gain) {
         FastNoiseLite fnl = new FastNoiseLite(seed);
@@ -25,8 +19,6 @@ public final class BiomeClassifier {
         fnl.SetFractalGain(gain);
         return fnl;
     }
-
-    private static final float NATIVE_RESOLUTION_M = WorldPipelineModelConfig.nativeResolution();
 
     // Trees need a growing season, the days averaging above 0.9 C, at least 94 days long and averaging
     // at least 6.4 C (Paulsen and Koerner 2014); this one rule places tree lines on mountains and in the arctic
@@ -67,29 +59,46 @@ public final class BiomeClassifier {
 
     private static final int MAX_SNOW_DEPTH = SNOW_BLOCK_DEPTH + LAYERS_PER_TIER;
 
-    // Biome IDs
-    static final short PLAINS = 1, RIVER = 7, FROZEN_RIVER = 11;
-    static final short SNOWY_PLAINS = 3, DESERT = 5, SWAMP = 6;
-    static final short FOREST = 8, TAIGA = 15, SNOWY_TAIGA = 16, SAVANNA = 17;
-    static final short WINDSWEPT_HILLS = 19, JUNGLE = 23, BADLANDS = 26, MEADOW = 29;
-    static final short GROVE = 31, SNOWY_SLOPES = 32, FROZEN_PEAKS = 33, STONY_PEAKS = 35;
-    static final short WARM_OCEAN = 41, OCEAN = 44, COLD_OCEAN = 46, FROZEN_OCEAN = 48;
-    static final short FOREST_SPARSE = 108, TAIGA_SPARSE = 115, SNOWY_TAIGA_SPARSE = 116;
+    // Native pixels the land's shape is averaged over: what reads as a slope, a rise or a shore
+    public static final int LANDFORM_RADIUS = 6;
+
+    // Native pixels a box is read beyond what it uses: the averaging reach and the one-pixel border
+    public static final int LANDFORM_MARGIN = LANDFORM_RADIUS + 1;
+
+    // The land's shape at a grid's pixels: world height averaged over LANDFORM_RADIUS with a one-pixel border,
+    // how far the world raised the ground on the same average, and the share of sea within that reach
+    public record Landform(float[] heightPadded, float[] raise, float[] sea) {}
+
+    // {height, raise, sea share} averaged over LANDFORM_RADIUS on an h x w grid of native pixels
+    public static float[][] landform(float[] world, float[] raise, int h, int w) {
+        float[] sea = new float[h * w];
+        for (int i = 0; i < sea.length; i++) sea[i] = world[i] < 0f ? 1f : 0f;
+        return new float[][]{boxBlur(world, h, w), boxBlur(raise, h, w), boxBlur(sea, h, w)};
+    }
+
+    private static float[] boxBlur(float[] src, int h, int w) {
+        int radius = LANDFORM_RADIUS;
+        float[] rows = new float[h * w], out = new float[h * w];
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < w; c++) {
+                float sum = 0f;
+                for (int k = -radius; k <= radius; k++) sum += src[r * w + Math.max(0, Math.min(w - 1, c + k))];
+                rows[r * w + c] = sum / (2 * radius + 1);
+            }
+        }
+        for (int r = 0; r < h; r++) {
+            for (int c = 0; c < w; c++) {
+                float sum = 0f;
+                for (int k = -radius; k <= radius; k++) sum += rows[Math.max(0, Math.min(h - 1, r + k)) * w + c];
+                out[r * w + c] = sum / (2 * radius + 1);
+            }
+        }
+        return out;
+    }
 
     // Classify biomes for a grid of pixels
-    public static short[] classify(float[] elev, float[] climate, int i0, int j0,
-                                    float[] elevPadded, int H, int W, float pixelSizeM) {
-        return classify(elev, climate, i0, j0, elevPadded, H, W, pixelSizeM, null, null);
-    }
-
-    public static short[] classify(float[] elev, float[] climate, int i0, int j0,
-                                    float[] elevPadded, int H, int W, float pixelSizeM,
-                                    byte[] snowLayersOut, boolean[] riverMask) {
-        return classify(elev, climate, i0, j0, 1, elevPadded, H, W, pixelSizeM, snowLayersOut, riverMask);
-    }
-
     public static short[] classify(float[] elev, float[] climate, int i0, int j0, int coordStep,
-                                    float[] elevPadded, int H, int W, float pixelSizeM,
+                                    float[] elevPadded, Landform land, int H, int W, float pixelSizeM,
                                     byte[] snowLayersOut, boolean[] riverMask) {
         if (climate.length != CLIMATE_CHANNELS * H * W) {
             throw new IllegalArgumentException("climate needs " + CLIMATE_CHANNELS + " channels of " + H + "x" + W);
@@ -105,21 +114,19 @@ public final class BiomeClassifier {
             for (int c = 0; c < W; c++) {
                 int idx = r * W + c;
                 float nx = j0 + c * coordStep, ny = i0 + r * coordStep;
-                float tnc = TEMP_NOISE.GetNoise(nx, ny);
-                float tnf = TEMP_NOISE_FINE.GetNoise(nx, ny);
-                tempNoise[idx] = 0.4f * tnc + 0.2f * tnf;
+                float coarse = COARSE_NOISE.GetNoise(nx, ny);
+                float fine = FINE_NOISE.GetNoise(nx, ny);
+                tempNoise[idx] = 0.4f * coarse + 0.2f * fine;
+                snowNoise[idx] = 3.0f * coarse + 2.0f * fine;
 
                 float pn = PRECIP_NOISE.GetNoise(nx, ny);
                 precipNoiseFact[idx] = 1.0f + 0.2f * pn;
-
-                float snc = SNOW_NOISE.GetNoise(nx, ny);
-                float snf = SNOW_NOISE_FINE.GetNoise(nx, ny);
-                snowNoise[idx] = 3.0f * snc + 2.0f * snf;
             }
         }
 
         // Compute slope from padded elevation using Sobel (divide by pixelSizeM for ratio)
         float[] slopeRatio = computeSlopeRatio(elevPadded, H, W, pixelSizeM);
+        float[] landSlope = computeSlopeRatio(land.heightPadded(), H, W, pixelSizeM);
 
         // Process per-pixel
         TerrainSample sample = new TerrainSample();
@@ -145,9 +152,15 @@ public final class BiomeClassifier {
                 float seasonPenalty = 1f - 0.35f * Math.min(1f, pCV / 100f);
                 float treeMoisture = aridity * seasonPenalty;
 
-                float lapse = Math.max(MIN_LAPSE, -climate[4 * H * W + idx]);
+                float lapseRate = -climate[4 * H * W + idx];
+                float lapse = Math.max(MIN_LAPSE, lapseRate);
                 float tReg = climate[5 * H * W + idx] + tempNoise[idx];
-                float relElev = (tReg - temp) / lapse;
+                // Zones and rises follow the land's shape: the model's height of the averaged surface, against
+                // the model's height here
+                float modelAlt = Math.max(0f, elevVal - climate[6 * H * W + idx]);
+                float landAlt = Math.max(0f, land.heightPadded()[(r + 1) * (W + 2) + c + 1] - land.raise()[idx]);
+                float zoneTemp = temp + (modelAlt - landAlt) * lapseRate;
+                float relElev = (tReg - zoneTemp) / lapse;
                 float moist = precip / potentialEvaporation(tReg, tStd) * seasonPenalty;
                 // Trees, snow and ice feel the air of their ground as the world raised it; climate keeps the
                 // model's height
@@ -193,7 +206,7 @@ public final class BiomeClassifier {
                 boolean slopeBare   = slope >= bareThreshold;
                 if (slopeMedium) {
                     if (treesForest || treesDense || treesRainforest) { treesSparse = true; }
-                    treesForest = treesForest && false; treesDense = false; treesRainforest = false;
+                    treesForest = false; treesDense = false; treesRainforest = false;
                 }
                 if (slopeBare) {
                     treesNone = true; treesSparse = false; treesForest = false;
@@ -220,8 +233,10 @@ public final class BiomeClassifier {
                 sample.worldZ = i0 + r * coordStep;
                 sample.elev = elevVal;
                 sample.altM = altM;
-                sample.slope = slope;
+                sample.slope = landSlope[idx];
+                sample.seaShare = land.sea()[idx];
                 sample.temp = temp;
+                sample.zoneTemp = zoneTemp;
                 sample.airC = airC;
                 sample.tReg = tReg;
                 sample.relElev = relElev;
@@ -320,6 +335,58 @@ public final class BiomeClassifier {
         return (byte) Math.min(MAX_SNOW_DEPTH, depth);
     }
 
+    // Snow thins toward open water and the sea: within EASE_REACH_BLOCKS of it a column holds at most
+    // EASE_LAYERS_PER_BLOCK layers per block of distance
+    private static final int EASE_REACH_BLOCKS = 8;
+    private static final float EASE_LAYERS_PER_BLOCK = 2f;
+
+    // Caps the snow of the tH x tW tile at the centre of an H x W block grid by each column's distance to water
+    // or below-sea ground; the grid's halo must be at least EASE_REACH_BLOCKS, so every cap depends only on the
+    // column's position
+    static void easeSnowNearWater(byte[] snow, float[] water, float[] bed, int H, int W, int halo, int tH, int tW) {
+        int n = H * W;
+        float[] dist = new float[n];
+        for (int i = 0; i < n; i++) {
+            dist[i] = water[i] > WaterNetwork.NO_WATER || bed[i] < 0f ? 0f : Float.MAX_VALUE;
+        }
+        float diag = (float) Math.sqrt(2.0);
+        for (int r = 0; r < H; r++) {
+            for (int c = 0; c < W; c++) {
+                int i = r * W + c;
+                float d = dist[i];
+                if (c > 0) d = Math.min(d, dist[i - 1] + 1f);
+                if (r > 0) {
+                    d = Math.min(d, dist[i - W] + 1f);
+                    if (c > 0) d = Math.min(d, dist[i - W - 1] + diag);
+                    if (c < W - 1) d = Math.min(d, dist[i - W + 1] + diag);
+                }
+                dist[i] = d;
+            }
+        }
+        for (int r = H - 1; r >= 0; r--) {
+            for (int c = W - 1; c >= 0; c--) {
+                int i = r * W + c;
+                float d = dist[i];
+                if (c < W - 1) d = Math.min(d, dist[i + 1] + 1f);
+                if (r < H - 1) {
+                    d = Math.min(d, dist[i + W] + 1f);
+                    if (c < W - 1) d = Math.min(d, dist[i + W + 1] + diag);
+                    if (c > 0) d = Math.min(d, dist[i + W - 1] + diag);
+                }
+                dist[i] = d;
+            }
+        }
+        for (int r = 0; r < tH; r++) {
+            for (int c = 0; c < tW; c++) {
+                float d = dist[(r + halo) * W + c + halo];
+                if (d <= 0f || d >= EASE_REACH_BLOCKS) continue;
+                int t = r * tW + c;
+                int cap = Math.max(1, Math.round(EASE_LAYERS_PER_BLOCK * d));
+                if (snow[t] > cap) snow[t] = (byte) cap;
+            }
+        }
+    }
+
     private static final float MIN_LAPSE = 0.003f;
 
     private static final float FROST_NOISE = 0.3f;
@@ -333,20 +400,18 @@ public final class BiomeClassifier {
         if (useTerralith) {
             return TerralithClassifier.river(s);
         }
-        if (s.airC <= -3f) {
-            return FROZEN_RIVER;
-        }
-        return RIVER;
+        return s.hasSnow ? FROZEN_RIVER : RIVER;
     }
 
     private static short classifyVanilla(TerrainSample s) {
         short biome = PLAINS;
 
         if (s.isOcean) {
-            if (s.frozen) biome = FROZEN_OCEAN;
-            else if (s.cold) biome = COLD_OCEAN;
-            else if (s.warm || s.hot) biome = WARM_OCEAN;
-            else biome = OCEAN;
+            boolean deep = TerralithClassifier.deepSea(s);
+            if (s.frozen) biome = deep ? DEEP_FROZEN_OCEAN : FROZEN_OCEAN;
+            else if (s.cold) biome = deep ? DEEP_COLD_OCEAN : COLD_OCEAN;
+            else if (s.warm || s.hot) biome = deep ? DEEP_LUKEWARM_OCEAN : WARM_OCEAN;
+            else biome = deep ? DEEP_OCEAN : OCEAN;
         } else if (s.mountains) {
             if (s.slopeBare) {
                 if (frozenSurface(s)) biome = FROZEN_PEAKS;
@@ -358,7 +423,7 @@ public final class BiomeClassifier {
                 else biome = SNOWY_TAIGA;
             } else if (s.treesNone) {
                 if (s.barren) biome = WINDSWEPT_HILLS;
-                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE;
+                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE_DRY;
                 else biome = PLAINS;
             } else if (s.treesSparse || s.treesForest) {
                 biome = TAIGA_SPARSE;
@@ -373,8 +438,8 @@ public final class BiomeClassifier {
                 biome = (s.treesSparse || s.treesForest) ? SNOWY_TAIGA_SPARSE : SNOWY_TAIGA;
             } else if (s.treesNone) {
                 if (s.warm || s.hot) biome = DESERT;
-                else if (s.barren && !s.lowland && (s.cold || s.cool || s.temperate)) biome = GROVE;
-                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE;
+                else if (s.barren && !s.lowland && (s.cold || s.cool || s.temperate)) biome = GROVE_DRY;
+                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE_DRY;
                 else biome = PLAINS;
             } else if (s.treesSparse || s.treesForest) {
                 if (s.hot) biome = JUNGLE;

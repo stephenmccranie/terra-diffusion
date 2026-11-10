@@ -43,6 +43,9 @@ public final class WaterNetwork {
     public static final class Sample {
         public float bedElevM;
         public float waterSurfaceM;
+        // The level the water surface was snapped down from, in metres, and whether a lake holds it
+        public float levelM;
+        public boolean lake;
 
         public boolean hasWater() {
             return waterSurfaceM > NO_WATER;
@@ -116,6 +119,8 @@ public final class WaterNetwork {
                               float lakeLevelM, float lakeDeepM, float metersPerBlock, Sample out) {
         out.bedElevM = elevM;
         out.waterSurfaceM = NO_WATER;
+        out.levelM = NO_WATER;
+        out.lake = false;
 
         boolean submarine = elevM < 0f;
         float seaFade = submarine ? clamp01(1f + elevM / (MOUTH_FADE_BLOCKS * metersPerBlock)) : 1f;
@@ -127,13 +132,14 @@ public final class WaterNetwork {
         float bank = BANK_BLOCKS * metersPerBlock;
         float minDepth = MIN_DEPTH_BLOCKS * metersPerBlock;
         float[] v = rivers.v;
-        float surfaceM = NO_WATER, nearest = Float.MAX_VALUE;
+        float surfaceM = NO_WATER, levelM = NO_WATER, nearest = Float.MAX_VALUE;
         for (int k = 0; k < rivers.count; k++) {
             int o = k * Reaches.FIELDS;
             float d = v[o];
             if (d < 0.5f * v[o + 2] * widen && d < nearest) {
                 nearest = d;
-                surfaceM = water(v[o + 1], metersPerBlock);
+                levelM = v[o + 1];
+                surfaceM = water(levelM, metersPerBlock);
             }
         }
         float channelBed = Float.MAX_VALUE, carve = 0f;
@@ -192,9 +198,12 @@ public final class WaterNetwork {
 
         if (surfaceM > NO_WATER && drawnBlock(surfaceM, metersPerBlock) > drawnBlock(bed, metersPerBlock)) {
             out.waterSurfaceM = surfaceM;
+            out.levelM = levelM;
         }
         if (inBasin && bed < lakeSurfaceM && lakeSurfaceM > out.waterSurfaceM) {
             out.waterSurfaceM = lakeSurfaceM;
+            out.levelM = lakeLevelM;
+            out.lake = true;
         }
     }
 }

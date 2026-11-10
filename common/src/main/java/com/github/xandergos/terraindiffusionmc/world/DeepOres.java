@@ -1,19 +1,18 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.mixin.HolderReferenceAccessor;
-import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipeline;
+import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.mojang.serialization.JsonOps;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Holder;
-import net.minecraft.core.Registry;
-import net.minecraft.core.RegistryAccess;
-import net.minecraft.core.registries.Registries;
+import net.minecraft.core.HolderSet;
 import net.minecraft.resources.RegistryOps;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.util.RandomSource;
+import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.levelgen.heightproviders.HeightProvider;
 import net.minecraft.world.level.levelgen.feature.ConfiguredFeature;
 import net.minecraft.world.level.levelgen.feature.configurations.OreConfiguration;
@@ -22,25 +21,30 @@ import net.minecraft.world.level.levelgen.placement.PlacementContext;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
-// Fits vanilla's placements by height to this world: at world load, ore bands reach down to its floor of -192 and stone
-// patches stay out of the deepslate; as features place, bands rise with the relief curve's lift of the land
+// Fits placements by height to this world. Its features were written for vanilla's world, so their height ranges
+// count in vanilla's Y: at world load, anchors measured from the world's floor or ceiling are pinned to where
+// vanilla's are, ore bands reach on down to this world's floor and stone patches stay out of the deepslate; as
+// features place, bands rise with the relief curve's lift of the land
 public final class DeepOres {
 
     private static final Logger LOG = LoggerFactory.getLogger(DeepOres.class);
 
-    private static final boolean ENABLED =
-            !"false".equals(System.getProperty("terradiff.deepOres"));
+    // The lowest and highest block of vanilla's overworld
+    private static final int VANILLA_MIN_Y = -64, VANILLA_MAX_Y = 319;
 
     // Deepslate is pure below Y 0 and mixed up to Y 8, so 8 is the first wholly-stone level
-    private static final int STONE_FLOOR =
-            Integer.parseInt(System.getProperty("terradiff.patchFloor", "8"));
+    private static final int STONE_FLOOR = 8;
 
+    private static final double PATCH_SCALE = 0.5;
 
-    private static final double PATCH_SCALE =
-            Double.parseDouble(System.getProperty("terradiff.patchScale", "0.5"));
+    // The most placements a count modifier may ask for
+    private static final int MAX_COUNT = 256;
 
     // Blob-shaped rock features only, so surface disks and vegetation are not caught
     private static final List<String> PATCH_FEATURES = List.of(
@@ -60,56 +64,71 @@ public final class DeepOres {
 
     @SuppressWarnings("unchecked")
     public static void apply(ServerLevel world) {
-        if (!ENABLED) return;
-
-        RegistryAccess access = world.registryAccess();
-        Registry<PlacedFeature> registry = access.registryOrThrow(Registries.PLACED_FEATURE);
-        RegistryOps<JsonElement> ops = RegistryOps.create(JsonOps.INSTANCE, access);
-
+        RegistryOps<JsonElement> ops = RegistryOps.create(JsonOps.INSTANCE, world.registryAccess());
         int minY = world.getMinBuildHeight();
-        int height = world.getMaxBuildHeight() - minY;
 
-        int oresExtended = 0, alreadyDeep = 0, patches = 0, failed = 0;
-        for (Holder.Reference<PlacedFeature> ref : registry.holders().toList()) {
+        // The features this world's biomes place; the registry also holds those of other dimensions
+        Set<Holder.Reference<PlacedFeature>> features = new LinkedHashSet<>();
+        for (Holder<Biome> biome : world.getChunkSource().getGenerator().getBiomeSource().possibleBiomes()) {
+            for (HolderSet<PlacedFeature> step : biome.value().getGenerationSettings().features()) {
+                for (Holder<PlacedFeature> feature : step) {
+                    if (feature instanceof Holder.Reference<PlacedFeature> ref) features.add(ref);
+                }
+            }
+        }
+
+        int pinned = 0, oresExtended = 0, alreadyDeep = 0, patches = 0, failed = 0;
+        for (Holder.Reference<PlacedFeature> ref : features) {
             PlacedFeature placed = ref.value();
 
             JsonElement encoded = PlacedFeature.DIRECT_CODEC.encodeStart(ops, placed)
                     .result().orElse(null);
             if (encoded == null || !encoded.isJsonObject()) continue;
             JsonObject root = encoded.getAsJsonObject();
-            if (!hasHeightRange(root)) continue;
 
+            boolean anchored = pinToVanilla(root.get("placement"));
             boolean patch = placesPatchBlock(ops, placed.feature().value());
             boolean ore = placed.feature().value().config() instanceof OreConfiguration;
-            if (!patch && !ore) continue;
-
-            int outcome = patch ? clampPatch(root, minY, height) : extendOre(root, minY, height);
-            if (outcome == 0) {
-                if (!patch) alreadyDeep++;
-                continue;
-            }
-            if (outcome < 0) {
-                failed++;
-                continue;
-            }
+            int outcome = !hasHeightRange(root) ? 0 : patch ? clampPatch(root) : ore ? extendOre(root, minY) : 0;
+            if (outcome < 0) failed++;
+            else if (outcome == 0 && ore && !patch) alreadyDeep++;
+            if (!anchored && outcome <= 0) continue;
 
             PlacedFeature rebuilt = PlacedFeature.DIRECT_CODEC.parse(ops, encoded)
-                    .resultOrPartial(err -> LOG.warn("rewrite rejected for {}: {}",
-                            ref.key().location(), err))
-                    .orElse(null);
-            if (rebuilt == null) {
-                failed++;
-                continue;
-            }
+                    .getOrThrow(error -> new IllegalStateException(
+                            "The height range of " + ref.key().location() + " could not be rewritten: " + error));
 
             ((HolderReferenceAccessor<PlacedFeature>) ref).terrainDiffusion$bindValue(rebuilt);
-            if (patch) patches++;
-            else oresExtended++;
+            if (anchored) pinned++;
+            if (outcome > 0 && patch) patches++;
+            else if (outcome > 0) oresExtended++;
         }
 
-        LOG.info("Ore bands extended to Y {}: {} rewritten, {} already reached the bottom. "
-                        + "Stone and dirt patches floored at Y {} and scaled by {}: {}. Left alone: {}",
-                minY, oresExtended, alreadyDeep, STONE_FLOOR, PATCH_SCALE, patches, failed);
+        LOG.info("Height ranges pinned to vanilla's Y: {}. Ore bands extended to Y {}: {} rewritten, {} already "
+                        + "reached the bottom. Stone and dirt patches floored at Y {} and scaled by {}: {}. "
+                        + "Left alone: {}",
+                pinned, minY, oresExtended, alreadyDeep, STONE_FLOOR, PATCH_SCALE, patches, failed);
+    }
+
+    // Turns every anchor measured from the world's floor or ceiling into the Y it names in vanilla's world, and
+    // tells whether there was one
+    static boolean pinToVanilla(JsonElement node) {
+        boolean pinned = false;
+        if (node.isJsonArray()) {
+            for (JsonElement child : node.getAsJsonArray()) pinned |= pinToVanilla(child);
+        } else if (node.isJsonObject()) {
+            JsonObject object = node.getAsJsonObject();
+            if (object.has("above_bottom")) {
+                object.addProperty("absolute", VANILLA_MIN_Y + object.remove("above_bottom").getAsInt());
+                return true;
+            }
+            if (object.has("below_top")) {
+                object.addProperty("absolute", VANILLA_MAX_Y - object.remove("below_top").getAsInt());
+                return true;
+            }
+            for (Map.Entry<String, JsonElement> child : object.entrySet()) pinned |= pinToVanilla(child.getValue());
+        }
+        return pinned;
     }
 
     /**
@@ -126,7 +145,7 @@ public final class DeepOres {
                                              HeightProvider height) {
         int y = height.sample(random, context);
         float base = TerrainWater.regionalBaseM(pos.getX(), pos.getZ());
-        if (y < STONE_FLOOR || !WorldPipeline.RELIEF.raises(base)) return Stream.of(pos.atY(y));
+        if (y < STONE_FLOOR || !LocalTerrainProvider.getInstance().relief.raises(base)) return Stream.of(pos.atY(y));
         double low = bandY(y, base);
         double span = bandY(y + 1, base) - low;
         int copies = (int) span + (random.nextDouble() < span - (int) span ? 1 : 0);
@@ -141,7 +160,8 @@ public final class DeepOres {
     private static double bandY(int y, float base) {
         float blockM = TerrainClimate.metresPerBlock();
         int sea = HeightConverter.SEA_LEVEL;
-        return sea + WorldPipeline.RELIEF.band((y - sea) * blockM, base, (STONE_FLOOR - sea) * blockM) / blockM;
+        return sea + LocalTerrainProvider.getInstance().relief.band((y - sea) * blockM, base, (STONE_FLOOR - sea) * blockM)
+                / blockM;
     }
 
     private static boolean hasHeightRange(JsonObject root) {
@@ -181,7 +201,7 @@ public final class DeepOres {
         return null;
     }
 
-    private static int clampPatch(JsonObject root, int minY, int height) {
+    private static int clampPatch(JsonObject root) {
         JsonArray placement = root.getAsJsonArray("placement");
         JsonObject range = find(placement, "minecraft:height_range");
         if (range == null || !range.has("height") || !range.get("height").isJsonObject()) return -1;
@@ -191,8 +211,8 @@ public final class DeepOres {
         if (!provider.get("min_inclusive").isJsonObject()
                 || !provider.get("max_inclusive").isJsonObject()) return -1;
 
-        Integer low = anchor(provider.getAsJsonObject("min_inclusive"), minY, height);
-        Integer high = anchor(provider.getAsJsonObject("max_inclusive"), minY, height);
+        Integer low = anchor(provider.getAsJsonObject("min_inclusive"));
+        Integer high = anchor(provider.getAsJsonObject("max_inclusive"));
         if (low == null || high == null) return -1;
         if (high <= STONE_FLOOR) return -1;
 
@@ -203,7 +223,7 @@ public final class DeepOres {
         return 1;
     }
 
-    private static int extendOre(JsonObject root, int minY, int height) {
+    private static int extendOre(JsonObject root, int minY) {
         JsonArray placement = root.getAsJsonArray("placement");
         JsonObject range = find(placement, "minecraft:height_range");
         if (range == null || !range.has("height") || !range.get("height").isJsonObject()) return -1;
@@ -213,8 +233,8 @@ public final class DeepOres {
         if (!provider.get("min_inclusive").isJsonObject()
                 || !provider.get("max_inclusive").isJsonObject()) return -1;
 
-        Integer low = anchor(provider.getAsJsonObject("min_inclusive"), minY, height);
-        Integer high = anchor(provider.getAsJsonObject("max_inclusive"), minY, height);
+        Integer low = anchor(provider.getAsJsonObject("min_inclusive"));
+        Integer high = anchor(provider.getAsJsonObject("max_inclusive"));
         if (low == null || high == null || high < low) return -1;
         if (low <= minY) return 0;
 
@@ -253,11 +273,8 @@ public final class DeepOres {
         return anchor;
     }
 
-    private static Integer anchor(JsonObject anchor, int minY, int height) {
-        if (anchor.has("absolute")) return anchor.get("absolute").getAsInt();
-        if (anchor.has("above_bottom")) return minY + anchor.get("above_bottom").getAsInt();
-        if (anchor.has("below_top")) return minY + height - 1 - anchor.get("below_top").getAsInt();
-        return null;
+    private static Integer anchor(JsonObject anchor) {
+        return anchor.has("absolute") ? anchor.get("absolute").getAsInt() : null;
     }
 
     // Modifiers run in order, so a count added where none existed must lead
@@ -274,7 +291,7 @@ public final class DeepOres {
         }
         JsonObject added = new JsonObject();
         added.addProperty("type", "minecraft:count");
-        added.addProperty("count", Math.max(1, (int) Math.round(factor)));
+        added.addProperty("count", scaled(1, factor));
         JsonArray reordered = new JsonArray();
         reordered.add(added);
         for (JsonElement element : placement) reordered.add(element);
@@ -285,7 +302,7 @@ public final class DeepOres {
         JsonElement value = count.get("count");
         if (value == null) return;
         if (value.isJsonPrimitive()) {
-            count.addProperty("count", Math.max(1, (int) Math.round(value.getAsInt() * factor)));
+            count.addProperty("count", scaled(value.getAsInt(), factor));
             return;
         }
         if (!value.isJsonObject()) return;
@@ -297,8 +314,7 @@ public final class DeepOres {
                 JsonObject wrapper = entry.getAsJsonObject();
                 JsonElement data = wrapper.get("data");
                 if (data != null && data.isJsonPrimitive()) {
-                    wrapper.addProperty("data",
-                            Math.max(1, (int) Math.round(data.getAsInt() * factor)));
+                    wrapper.addProperty("data", scaled(data.getAsInt(), factor));
                 }
             }
             return;
@@ -309,9 +325,12 @@ public final class DeepOres {
                 : inner;
         for (String key : List.of("min_inclusive", "max_inclusive", "value")) {
             if (bounds.has(key) && bounds.get(key).isJsonPrimitive()) {
-                bounds.addProperty(key,
-                        Math.max(1, (int) Math.round(bounds.get(key).getAsInt() * factor)));
+                bounds.addProperty(key, scaled(bounds.get(key).getAsInt(), factor));
             }
         }
+    }
+
+    private static int scaled(int count, double factor) {
+        return Math.max(1, Math.min(MAX_COUNT, (int) Math.round(count * factor)));
     }
 }

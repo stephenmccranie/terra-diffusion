@@ -7,9 +7,17 @@ public final class TerrainSample {
 
     public float altM;
 
+    // Slope of the land's shape, averaged over BiomeClassifier.LANDFORM_RADIUS; trees and bare rock read the
+    // ground's own slope through slopeMedium and slopeBare
     public float slope;
 
+    // Share of sea within the landform's reach
+    public float seaShare;
+
     public float temp;
+
+    // Temperature at the land's averaged surface, which sets the zones of heat and dryness
+    public float zoneTemp;
 
     public float airC;
 

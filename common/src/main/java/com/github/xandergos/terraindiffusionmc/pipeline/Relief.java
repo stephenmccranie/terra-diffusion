@@ -1,7 +1,5 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
-import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
-
 // How model heights become world heights. The model learned real-world heights, whose peaks rarely pass
 // 4,000 m, while a world's height budget assumes a 10,000 m peak. The land's large shape (its regional base,
 // about a kilometre across) is left alone below `start` and rises ever faster above it, until from `full` on
@@ -17,20 +15,15 @@ public record Relief(float start, float full, float gain, float peaks) {
 
     public Relief {
         if (!(start >= 0f && full > start && full < KNEE_M)) {
-            throw new IllegalArgumentException("relief.start and relief.full must satisfy 0 <= start < full < "
+            throw new IllegalArgumentException("relief start and full must satisfy 0 <= start < full < "
                     + KNEE_M + "; got start=" + start + ", full=" + full);
         }
         if (!(gain >= 1f)) {
-            throw new IllegalArgumentException("relief.gain must be at least 1; got " + gain);
+            throw new IllegalArgumentException("relief gain must be at least 1; got " + gain);
         }
         if (!(peaks >= 0f)) {
-            throw new IllegalArgumentException("relief.peaks must be at least 0; got " + peaks);
+            throw new IllegalArgumentException("relief peaks must be at least 0; got " + peaks);
         }
-    }
-
-    public static Relief fromConfig() {
-        return new Relief(TerrainDiffusionConfig.reliefStartM(), TerrainDiffusionConfig.reliefFullM(),
-                TerrainDiffusionConfig.reliefGain(), TerrainDiffusionConfig.reliefPeaks());
     }
 
     // World height of ground at model height m whose regional base is at model height base
