@@ -20,12 +20,12 @@ public final class KarstNetwork {
     final float[] rv;
     final byte[] zone;
 
+    // Segments are listed by the cubes of cellSize blocks they come within a block of
     final int cellSize;
-    final int originX, originZ;
-    final int nx, nz;
+    final int originX, originY, originZ;
+    final int nx, ny, nz;
     final int[] cellStart;
     final int[] cellItems;
-    final float[] cellYMin, cellYMax;
 
     final int wtOriginX, wtOriginZ, wtStep, wtNX, wtNZ;
     final short[] wtY;
@@ -40,11 +40,10 @@ public final class KarstNetwork {
         this.rh = this.rv = new float[0];
         this.zone = new byte[0];
         this.cellSize = 1;
-        this.originX = this.originZ = 0;
-        this.nx = this.nz = 0;
+        this.originX = this.originY = this.originZ = 0;
+        this.nx = this.ny = this.nz = 0;
         this.cellStart = new int[1];
         this.cellItems = new int[0];
-        this.cellYMin = this.cellYMax = new float[0];
         this.wtOriginX = this.wtOriginZ = 0;
         this.wtStep = 1;
         this.wtNX = this.wtNZ = 0;
@@ -77,17 +76,23 @@ public final class KarstNetwork {
             loZ[s] = Math.min(az[s], bz[s]); hiZ[s] = Math.max(az[s], bz[s]);
         }
 
-        int cells = nx * nz;
+        float low = Float.MAX_VALUE, high = -Float.MAX_VALUE;
+        for (int s = 0; s < count; s++) {
+            low = Math.min(low, loY[s] - rv[s] - 1f);
+            high = Math.max(high, hiY[s] + rv[s] + 1f);
+        }
+        this.originY = (int) Math.floor(low);
+        this.ny = cellY(high) + 1;
+
+        int cells = nx * ny * nz;
         int[] counts = new int[cells + 1];
         for (int s = 0; s < count; s++) {
-            int c0 = cellX(Math.min(ax[s], bx[s]) - rh[s] - 1f);
-            int c1 = cellX(Math.max(ax[s], bx[s]) + rh[s] + 1f);
-            int d0 = cellZ(Math.min(az[s], bz[s]) - rh[s] - 1f);
-            int d1 = cellZ(Math.max(az[s], bz[s]) + rh[s] + 1f);
-            for (int c = c0; c <= c1; c++) {
+            int c0 = Math.max(0, cellX(loX[s] - rh[s] - 1f)), c1 = Math.min(nx - 1, cellX(hiX[s] + rh[s] + 1f));
+            int d0 = Math.max(0, cellZ(loZ[s] - rh[s] - 1f)), d1 = Math.min(nz - 1, cellZ(hiZ[s] + rh[s] + 1f));
+            int e0 = cellY(loY[s] - rv[s] - 1f), e1 = cellY(hiY[s] + rv[s] + 1f);
+            for (int e = e0; e <= e1; e++) {
                 for (int d = d0; d <= d1; d++) {
-                    if (c < 0 || d < 0 || c >= nx || d >= nz) continue;
-                    counts[d * nx + c + 1]++;
+                    for (int c = c0; c <= c1; c++) counts[(e * nz + d) * nx + c + 1]++;
                 }
             }
         }
@@ -95,26 +100,16 @@ public final class KarstNetwork {
         this.cellStart = counts;
         this.cellItems = new int[counts[cells]];
         int[] cursor = new int[cells];
-        this.cellYMin = new float[cells];
-        this.cellYMax = new float[cells];
-        java.util.Arrays.fill(cellYMin, Float.MAX_VALUE);
-        java.util.Arrays.fill(cellYMax, -Float.MAX_VALUE);
-
         for (int s = 0; s < count; s++) {
-            float pad = rv[s] + 1f;
-            float lo = Math.min(ay[s], by[s]) - pad;
-            float hi = Math.max(ay[s], by[s]) + pad;
-            int c0 = cellX(Math.min(ax[s], bx[s]) - rh[s] - 1f);
-            int c1 = cellX(Math.max(ax[s], bx[s]) + rh[s] + 1f);
-            int d0 = cellZ(Math.min(az[s], bz[s]) - rh[s] - 1f);
-            int d1 = cellZ(Math.max(az[s], bz[s]) + rh[s] + 1f);
-            for (int c = c0; c <= c1; c++) {
+            int c0 = Math.max(0, cellX(loX[s] - rh[s] - 1f)), c1 = Math.min(nx - 1, cellX(hiX[s] + rh[s] + 1f));
+            int d0 = Math.max(0, cellZ(loZ[s] - rh[s] - 1f)), d1 = Math.min(nz - 1, cellZ(hiZ[s] + rh[s] + 1f));
+            int e0 = cellY(loY[s] - rv[s] - 1f), e1 = cellY(hiY[s] + rv[s] + 1f);
+            for (int e = e0; e <= e1; e++) {
                 for (int d = d0; d <= d1; d++) {
-                    if (c < 0 || d < 0 || c >= nx || d >= nz) continue;
-                    int cell = d * nx + c;
-                    cellItems[cellStart[cell] + cursor[cell]++] = s;
-                    if (lo < cellYMin[cell]) cellYMin[cell] = lo;
-                    if (hi > cellYMax[cell]) cellYMax[cell] = hi;
+                    for (int c = c0; c <= c1; c++) {
+                        int cell = (e * nz + d) * nx + c;
+                        cellItems[cellStart[cell] + cursor[cell]++] = s;
+                    }
                 }
             }
         }
@@ -122,6 +117,10 @@ public final class KarstNetwork {
 
     private int cellX(float x) {
         return Math.floorDiv((int) Math.floor(x) - originX, cellSize);
+    }
+
+    private int cellY(float y) {
+        return Math.floorDiv((int) Math.floor(y) - originY, cellSize);
     }
 
     private int cellZ(float z) {
@@ -133,7 +132,7 @@ public final class KarstNetwork {
     }
 
     // Signed distance to the nearest conduit wall in blocks, negative inside a conduit: exact where it is below
-    // limit, otherwise some value at or above limit
+    // limit and a conduit lies within a block, otherwise some greater value
     public float density(float x, float y, float z, float limit) {
         return density(x, y, z, false, limit);
     }
@@ -157,13 +156,11 @@ public final class KarstNetwork {
 
     private float density(float x, float y, float z, boolean dolinesOnly, float limit) {
         if (count == 0) return FAR;
-        int c = cellX(x);
-        int d = cellZ(z);
-        if (c < 0 || d < 0 || c >= nx || d >= nz) return FAR;
-        int cell = d * nx + c;
+        int c = cellX(x), d = cellZ(z), e = cellY(y);
+        if (c < 0 || d < 0 || e < 0 || c >= nx || d >= nz || e >= ny) return FAR;
+        int cell = (e * nz + d) * nx + c;
         int from = cellStart[cell], to = cellStart[cell + 1];
         if (from == to) return FAR;
-        if (y < cellYMin[cell] || y > cellYMax[cell]) return FAR;
 
         float slack = slack(x, y, z);
         float best = FAR;

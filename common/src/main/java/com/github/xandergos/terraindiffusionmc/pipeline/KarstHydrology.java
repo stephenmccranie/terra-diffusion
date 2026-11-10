@@ -9,10 +9,8 @@ public final class KarstHydrology {
     private static final int MARGIN_CELLS = 64;
     private static final int H_STEP_CELLS = 6;
     private static final float V_STEP_BLOCKS = 12f;
-    private static final int MAX_LEVELS = 48;
 
     private static final int FLOOR_Y = DeepCaverns.TOP - 4;
-    private static final int KARST_MAX_Y = 320;
     private static final float ROOF_BLOCKS = 18f;
 
     private static final float WT_GRADIENT = 0.035f;
@@ -181,17 +179,10 @@ public final class KarstHydrology {
             }
         }
 
-        int yTop = Math.min(maxSurf - (int) ROOF_BLOCKS, KARST_MAX_Y);
+        // Levels stand V_STEP_BLOCKS apart from the floor up to the roof of the window's highest ground
+        int yTop = maxSurf - (int) ROOF_BLOCKS;
         if (yTop <= FLOOR_Y + 8) return KarstNetwork.EMPTY;
-
-        float vs = V_STEP_BLOCKS;
-        int levels = (int) Math.ceil((yTop - FLOOR_Y) / vs) + 1;
-        if (levels > MAX_LEVELS) {
-            levels = MAX_LEVELS;
-            vs = (yTop - FLOOR_Y) / (float) (levels - 1);
-        }
-        final int K = levels;
-        final float vstep = vs;
+        final int K = (int) Math.ceil((yTop - FLOOR_Y) / V_STEP_BLOCKS) + 1;
         final int nodes = nxz * nxz * K;
 
         float[] nodeDist = new float[nodes];
@@ -214,7 +205,7 @@ public final class KarstHydrology {
                 if (u / hs >= nxz || v / hs >= nxz) continue;
                 int col = (u / hs) * nxz + (v / hs);
                 int y = HeightConverter.toY(water[w], blockM) - (int) SPRING_DROP_BLOCKS;
-                int k = level(y, vstep, K);
+                int k = level(y, K);
                 if (k < 0) continue;
                 if (springLevel[col] < 0 || k < springLevel[col]) springLevel[col] = k;
             }
@@ -222,8 +213,8 @@ public final class KarstHydrology {
         for (int col = 0; col < nxz * nxz; col++) {
             int k = springLevel[col];
             if (k < 0) continue;
-            if (blocked(colSurf[col], k, vstep)) {
-                k = level(colSurf[col] - (int) ROOF_BLOCKS - 1, vstep, K);
+            if (blocked(colSurf[col], k)) {
+                k = level(colSurf[col] - (int) ROOF_BLOCKS - 1, K);
                 if (k < 0) continue;
             }
             int n = col * K + k;
@@ -239,7 +230,7 @@ public final class KarstHydrology {
                 if (colSurf[col] < bestY) { bestY = colSurf[col]; best = col; }
             }
             if (best < 0) return KarstNetwork.EMPTY;
-            int k = level(colWt[best], vstep, K);
+            int k = level(colWt[best], K);
             if (k < 0) return KarstNetwork.EMPTY;
             int n = best * K + k;
             nodeDist[n] = 0f;
@@ -280,7 +271,7 @@ public final class KarstHydrology {
             int k = n % K;
             int col = n / K;
             int cu = col / nxz, cv = col % nxz;
-            float y0 = FLOOR_Y + k * vstep;
+            float y0 = FLOOR_Y + k * V_STEP_BLOCKS;
             float x0 = colPosX[col];
             float z0 = colPosZ[col];
 
@@ -288,10 +279,10 @@ public final class KarstHydrology {
                 int nu = cu + dU[e], nv = cv + dV[e], nk = k + dK[e];
                 if (nu < 0 || nv < 0 || nu >= nxz || nv >= nxz || nk < 0 || nk >= K) continue;
                 int ncol = nu * nxz + nv;
-                if (blocked(colSurf[ncol], nk, vstep)) continue;
+                if (blocked(colSurf[ncol], nk)) continue;
                 int m = ncol * K + nk;
 
-                float y1 = FLOOR_Y + nk * vstep;
+                float y1 = FLOOR_Y + nk * V_STEP_BLOCKS;
                 float x1 = colPosX[ncol];
                 float z1 = colPosZ[ncol];
 
@@ -358,7 +349,7 @@ public final class KarstHydrology {
                     colAcc[col] = score;
                     colDoline[col] = doline;
                     int y = groundY[u * kn + v] - (int) SINK_DROP_BLOCKS;
-                    colSinkLevel[col] = level(y, vstep, K);
+                    colSinkLevel[col] = level(y, K);
                 }
             }
         }
@@ -390,8 +381,8 @@ public final class KarstHydrology {
             }
             if (clash) continue;
             int k = colSinkLevel[col];
-            if (blocked(colSurf[col], k, vstep)) {
-                k = level(colSurf[col] - (int) ROOF_BLOCKS - 1, vstep, K);
+            if (blocked(colSurf[col], k)) {
+                k = level(colSurf[col] - (int) ROOF_BLOCKS - 1, K);
                 if (k < 0) continue;
             }
             int n = col * K + k;
@@ -419,7 +410,7 @@ public final class KarstHydrology {
             if (onPath[n] || nodeDist[n] >= Float.MAX_VALUE) continue;
             if (((mix(n) >>> 1) & 1023) >= DEADEND_RATE) continue;
             int col = n / K;
-            float y = FLOOR_Y + (n % K) * vstep;
+            float y = FLOOR_Y + (n % K) * V_STEP_BLOCKS;
             float table = colWt[col];
             float hbest = horizonDistance(y, table, colSurf[col]);
             if (hbest > HORIZON_REACH * 1.5f) continue;
@@ -445,10 +436,10 @@ public final class KarstHydrology {
 
             int k = n % K, col = n / K;
             int pk = p % K, pcol = p / K;
-            float ay = FLOOR_Y + k * vstep;
+            float ay = FLOOR_Y + k * V_STEP_BLOCKS;
             float ax = colPosX[col];
             float az = colPosZ[col];
-            float by = FLOOR_Y + pk * vstep;
+            float by = FLOOR_Y + pk * V_STEP_BLOCKS;
             float bxx = colPosX[pcol];
             float bzz = colPosZ[pcol];
 
@@ -458,7 +449,7 @@ public final class KarstHydrology {
 
             float tableA = colWt[col], tableB = colWt[pcol];
             float groundA = colSurf[col], groundB = colSurf[pcol];
-            float amp = WANDER * Math.min(hStepBlocks, vstep);
+            float amp = WANDER * Math.min(hStepBlocks, V_STEP_BLOCKS);
 
             for (int s = 0; s < SUBDIVISIONS && em.n < MAX_SEGMENTS; s++) {
                 float t0 = s / (float) SUBDIVISIONS;
@@ -543,7 +534,7 @@ public final class KarstHydrology {
             usedDoline[dcol] = true;
             dolines++;
 
-            float bottom = FLOOR_Y + (node % K) * vstep - DOLINE_EXTRA;
+            float bottom = FLOOR_Y + (node % K) * V_STEP_BLOCKS - DOLINE_EXTRA;
             int steps = 10;
             float[] sx = new float[steps + 1];
             float[] syv = new float[steps + 1];
@@ -635,15 +626,15 @@ public final class KarstHydrology {
         return (windowI + k0 + cu * hs + hs * 0.5f) * blocksPerCell;
     }
 
-    private static int level(float y, float vstep, int K) {
-        int k = Math.round((y - FLOOR_Y) / vstep);
+    private static int level(float y, int K) {
+        int k = Math.round((y - FLOOR_Y) / V_STEP_BLOCKS);
         if (k < 0) return -1;
         if (k >= K) k = K - 1;
         return k;
     }
 
-    private static boolean blocked(short surfY, int k, float vstep) {
-        return FLOOR_Y + k * vstep > surfY - ROOF_BLOCKS;
+    private static boolean blocked(short surfY, int k) {
+        return FLOOR_Y + k * V_STEP_BLOCKS > surfY - ROOF_BLOCKS;
     }
 
     private static void chamfer(float[] srcY, float[] dist, int n) {

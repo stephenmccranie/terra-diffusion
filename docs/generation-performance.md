@@ -16,6 +16,8 @@ the workers.
   influence boxes, and its top bounds the ceiling.
 - **Cave lattice.** `DeepCaverns` evaluates its 3D noise on a 4-block lattice and
   interpolates.
+- **Karst lookup.** A region's cave passages are listed by the cubes of blocks they pass
+  through, so a block tests only the passages beside it, however tall its column.
 
 Chunks the fill does not cover (blending, aquifers, ore veins, other density functions,
 incomplete height data) take the generator's own fill.
