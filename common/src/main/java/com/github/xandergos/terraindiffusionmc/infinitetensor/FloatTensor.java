@@ -62,6 +62,20 @@ public class FloatTensor {
         }
     }
 
+    // An overlap-added [C + 1, H, W] tensor holds its windows' weighted sums and, in the last channel, the weight
+    // they summed at each pixel. This is its C blended channels.
+    public FloatTensor blended() {
+        int channels = shape[0] - 1, n = shape[1] * shape[2];
+        FloatTensor out = new FloatTensor(new int[]{channels, shape[1], shape[2]});
+        for (int px = 0; px < n; px++) {
+            float weight = data[channels * n + px];
+            if (weight > 1e-6f) {
+                for (int ch = 0; ch < channels; ch++) out.data[ch * n + px] = data[ch * n + px] / weight;
+            }
+        }
+        return out;
+    }
+
     @Override
     public String toString() {
         return "FloatTensor(shape=" + Arrays.toString(shape) + ")";

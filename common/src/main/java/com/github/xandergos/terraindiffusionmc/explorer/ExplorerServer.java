@@ -475,8 +475,7 @@ public final class ExplorerServer {
         int H = ci1 - ci0, W = cj1 - cj0;
         float[] result = new float[H * W];
         for (int i = 0; i < H * W; i++) {
-            float w   = slice.data[6 * H * W + i];
-            float raw = (w > 1e-8f) ? slice.data[channel * H * W + i] / w : 0f;
+            float raw = slice.data[channel * H * W + i];
             // Channels 0 (elev) and 1 (p5): signed-sqrt → real units via sign(v)*v^2
             result[i] = (channel <= 1) ? (float) (Math.signum(raw) * raw * raw) : raw;
         }

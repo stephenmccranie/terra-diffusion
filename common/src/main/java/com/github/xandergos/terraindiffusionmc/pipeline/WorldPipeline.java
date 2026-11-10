@@ -6,6 +6,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
@@ -274,15 +275,11 @@ public final class WorldPipeline implements AutoCloseable {
             float[] cond58 = buildLatentConditioning(coarseSlices.get(b));
             System.arraycopy(cond58, 0, condInputBatch, b * 58, 58);
 
-            // Build sample (unnormalized prev output or zeros)
+            // The sample is the previous stage's output, or zeros
             float[] sample = new float[5 * S * S];
             if (prevSamples != null) {
-                FloatTensor ps = prevSamples.get(b);
-                for (int ch = 0; ch < 5; ch++)
-                    for (int px = 0; px < S * S; px++) {
-                        float w = ps.data[5 * S * S + px];
-                        sample[ch * S * S + px] = (w > 1e-6f) ? ps.data[ch * S * S + px] / w * SIGMA_DATA : 0f;
-                    }
+                float[] previous = prevSamples.get(b).blended().data;
+                for (int k = 0; k < 5 * S * S; k++) sample[k] = previous[k] * SIGMA_DATA;
             }
 
             float[] noise = flatten3D(GaussianNoisePatch.generate(seed + seedOffset, i1, j1, S, S, 5, S, S));
@@ -330,13 +327,7 @@ public final class WorldPipeline implements AutoCloseable {
     // Build 58-dim conditioning vector from a (7,4,4) coarse tile slice
     private float[] buildLatentConditioning(FloatTensor coarseSlice) {
         int N = 4 * 4;
-        // Unnormalize: cond[:-1] / cond[-1] for each pixel
-        float[] condFlat = new float[6 * N];
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < N; px++) {
-                float w = coarseSlice.data[6 * N + px];
-                condFlat[ch * N + px] = (w > 1e-6f) ? coarseSlice.data[ch * N + px] / w : 0f;
-            }
+        float[] condFlat = coarseSlice.blended().data;
 
         // Append mask channel (all ones = (1 - mean) / std normalized)
         float[] condImg7 = new float[7 * N];
@@ -397,16 +388,8 @@ public final class WorldPipeline implements AutoCloseable {
         int i1 = wi[1] * ST, j1 = wi[2] * ST;
         float cosT = (float) Math.cos(t), sinT = (float) Math.sin(t);
 
-        // Unnormalize latents channels 0..3 (4 channels)
-        float[] latFlat = new float[4 * Slc * Slc];
-        for (int ch = 0; ch < 4; ch++)
-            for (int px = 0; px < Slc * Slc; px++) {
-                float w = latentSlice.data[5 * Slc * Slc + px];
-                latFlat[ch * Slc * Slc + px] = (w > 1e-6f) ? latentSlice.data[ch * Slc * Slc + px] / w : 0f;
-            }
-
-        // Nearest-neighbor upsample (4, Slc, Slc) → (4, S, S)
-        float[] upsampled = nearestUpsample(latFlat, 4, Slc, Slc, S, S);
+        // Latent channels 0..3, nearest-neighbour upsampled (4, Slc, Slc) → (4, S, S)
+        float[] upsampled = nearestUpsample(latentSlice.blended().data, 4, Slc, Slc, S, S);
 
         // One flow-matching step (sample starts at zero)
         float[] noise = flatten3D(GaussianNoisePatch.generate(seed + 5819, i1, j1, S, S, 1, S, S));
@@ -446,22 +429,20 @@ public final class WorldPipeline implements AutoCloseable {
         });
     }
 
-    // Returns a coarse tensor slice with shape [7, ci1-ci0, cj1-cj0]
+    // The coarse map's six channels over a box of coarse pixels, shape [6, ci1-ci0, cj1-cj0]
     public FloatTensor getCoarseSlice(int ci0, int cj0, int ci1, int cj1) {
-        return read(ci1 - ci0, cj1 - cj0, () -> coarse.getSlice(new int[]{0, ci0, cj0}, new int[]{7, ci1, cj1}));
+        return read(ci1 - ci0, cj1 - cj0, () -> coarse.getSlice(new int[]{0, ci0, cj0}, new int[]{7, ci1, cj1}))
+                .blended();
     }
 
     // Returns the latent stage's low-frequency elevation channel over a latent-pixel box,
     public float[] getLowfreqSlice(int li0, int lj0, int li1, int lj1) {
         int h = li1 - li0, w = lj1 - lj0;
         int px = h * w;
-        FloatTensor slice = read(h, w, () -> latents.getSlice(new int[]{0, li0, lj0}, new int[]{6, li1, lj1}));
+        float[] latent = read(h, w, () -> latents.getSlice(new int[]{0, li0, lj0}, new int[]{6, li1, lj1}))
+                .blended().data;
         float[] out = new float[px];
-        for (int k = 0; k < px; k++) {
-            float weight = slice.data[5 * px + k];
-            float v = (weight > 1.0e-6f) ? slice.data[4 * px + k] / weight : 0f;
-            out[k] = v * LOWFREQ_STD + LOWFREQ_MEAN;
-        }
+        for (int k = 0; k < px; k++) out[k] = latent[4 * px + k] * LOWFREQ_STD + LOWFREQ_MEAN;
         return out;
     }
 
@@ -501,24 +482,16 @@ public final class WorldPipeline implements AutoCloseable {
         FloatTensor[] slices = read(i2 - i1, j2 - j1, () -> new FloatTensor[]{
                 residual.getSlice(new int[]{0, pi1, pj1}, new int[]{2, pi2, pj2}),
                 latents.getSlice(new int[]{0, pi1 / lc, pj1 / lc}, new int[]{6, pi2 / lc, pj2 / lc})});
-        FloatTensor resSlice = slices[0];
+        float[] residualFlat = slices[0].blended().data;
         float[][] residualP = new float[pH][pW];
         for (int r = 0; r < pH; r++)
-            for (int c = 0; c < pW; c++) {
-                float w = resSlice.data[pH * pW + r * pW + c];
-                float v = (w > 1e-6f) ? resSlice.data[r * pW + c] / w : 0f;
-                residualP[r][c] = v * RESIDUAL_STD + RESIDUAL_MEAN;
-            }
+            for (int c = 0; c < pW; c++) residualP[r][c] = residualFlat[r * pW + c] * RESIDUAL_STD + RESIDUAL_MEAN;
 
         int lH = pH / lc, lW = pW / lc;
-        FloatTensor latSlice = slices[1];
+        float[] latent = slices[1].blended().data;
         float[][] lowfreqP = new float[lH][lW];
         for (int r = 0; r < lH; r++)
-            for (int c = 0; c < lW; c++) {
-                float w = latSlice.data[5 * lH * lW + r * lW + c];
-                float v = (w > 1e-6f) ? latSlice.data[4 * lH * lW + r * lW + c] / w : 0f;
-                lowfreqP[r][c] = v * LOWFREQ_STD + LOWFREQ_MEAN;
-            }
+            for (int c = 0; c < lW; c++) lowfreqP[r][c] = latent[4 * lH * lW + r * lW + c] * LOWFREQ_STD + LOWFREQ_MEAN;
 
         float[][] newLowres = LaplacianUtils.laplacianDenoise(residualP, lowfreqP, sigma);
         float[][] baseP = LaplacianUtils.bilinearResize(newLowres, pH, pW);
@@ -551,18 +524,12 @@ public final class WorldPipeline implements AutoCloseable {
 
         int win = 15, pad = (win - 1) / 2 + 1;
 
-        FloatTensor coarseSlice = read(H, W, () -> coarse.getSlice(
-                new int[]{0, ci1 - pad, cj1 - pad}, new int[]{7, ci2 + pad, cj2 + pad}));
+        float[] coarseFlat = getCoarseSlice(ci1 - pad, cj1 - pad, ci2 + pad, cj2 + pad).data;
         int cH = ci2 + pad - (ci1 - pad);
         int cW = cj2 + pad - (cj1 - pad);
 
-        // Unnormalize all 6 coarse channels
-        float[][] coarseMap = new float[6][cH * cW];
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < cH * cW; px++) {
-                float w = coarseSlice.data[6 * cH * cW + px];
-                coarseMap[ch][px] = (w > 1e-6f) ? coarseSlice.data[ch * cH * cW + px] / w : 0f;
-            }
+        float[][] coarseMap = new float[6][];
+        for (int ch = 0; ch < 6; ch++) coarseMap[ch] = Arrays.copyOfRange(coarseFlat, ch * cH * cW, (ch + 1) * cH * cW);
 
         // Coarse elevation (undo sqrt): max(0, v)^2 — ocean pixels clamp to 0, matching Python
         float[] coarseElev = new float[cH * cW];

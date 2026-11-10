@@ -89,7 +89,7 @@ public final class SpawnSelector {
                     // Need a 1-pixel border for neighbor checks
                     if (row < 1 || row >= H - 1 || col < 1 || col >= W - 1) continue;
 
-                    if (isFullyOnLand(coarse, row, col, H, W)) {
+                    if (isFullyOnLand(coarse, row, col, W)) {
                         // Convert local coarse index to absolute coarse coords
                         int ci = ci0 + row;
                         int cj = cj0 + col;
@@ -106,22 +106,17 @@ public final class SpawnSelector {
     }
 
     // Returns true if the pixel at (row, col) and all 8 of its neighbors have a positive unnormalized
-    private static boolean isFullyOnLand(FloatTensor coarse, int row, int col, int H, int W) {
+    private static boolean isFullyOnLand(FloatTensor coarse, int row, int col, int W) {
         for (int dr = -1; dr <= 1; dr++) {
             for (int dc = -1; dc <= 1; dc++) {
-                if (!isLand(coarse, row + dr, col + dc, H, W)) return false;
+                if (!isLand(coarse, row + dr, col + dc, W)) return false;
             }
         }
         return true;
     }
 
-    // A coarse pixel is considered land when its unnormalized channel-0 value is positive
-    private static boolean isLand(FloatTensor coarse, int row, int col, int H, int W) {
-        int pixelCount = H * W;
-        int px = row * W + col;
-        float weight = coarse.data[6 * pixelCount + px];
-        if (weight <= 1e-6f) return false;
-        float elevSqrt = coarse.data[px] / weight;  // channel 0
-        return elevSqrt > 0f;
+    // A coarse pixel is land where its elevation, channel 0, is positive
+    private static boolean isLand(FloatTensor coarse, int row, int col, int W) {
+        return coarse.data[row * W + col] > 0f;
     }
 }

@@ -1010,10 +1010,8 @@ public final class RiverHydrology {
         int cn = ch * cw;
         float[][] cell = new float[2][cn];
         for (int k = 0; k < cn; k++) {
-            float weight = coarse.data[6 * cn + k];
-            if (weight <= 1e-6f) continue;
-            double rain = Math.max(0f, coarse.data[4 * cn + k] / weight);
-            double evaporation = 58.93 * Math.max(0f, coarse.data[2 * cn + k] / weight);
+            double rain = Math.max(0f, coarse.data[4 * cn + k]);
+            double evaporation = 58.93 * Math.max(0f, coarse.data[2 * cn + k]);
             double aridity = evaporation / Math.max(1.0, rain);
             cell[0][k] = (float) (rain * (Math.pow(1 + Math.pow(aridity, 2.6), 1 / 2.6) - aridity)
                     / REFERENCE_RUNOFF_MM);
