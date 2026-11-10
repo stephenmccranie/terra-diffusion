@@ -7,6 +7,9 @@
   "mixins": [
     "BeardifierAccessor",
     "BiomeMixin",
+    "CanyonWorldCarverMixin",
+    "CarvingContextMixin",
+    "CaveWorldCarverMixin",
     "ChunkGeneratorStructureStateMixin",
     "DiskFeatureMixin",
     "HeightRangePlacementMixin",
