@@ -125,7 +125,7 @@ terralith.enabled=true
 terralith.inject_surface_rules=true
 ```
 
-The last four keys are specific to this fork.
+The last four keys are specific to this fork. A key this build does not read stops the game at startup, so a setting that moved or went away is never silently ignored.
 
 ### Terralith compatibility
 

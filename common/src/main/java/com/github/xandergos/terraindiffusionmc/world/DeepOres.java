@@ -43,6 +43,9 @@ public final class DeepOres {
 
     private static final double PATCH_SCALE = 0.5;
 
+    // The most placements a count modifier may ask for
+    private static final int MAX_COUNT = 256;
+
     // Blob-shaped rock features only, so surface disks and vegetation are not caught
     private static final List<String> PATCH_FEATURES = List.of(
             "minecraft:ore",
@@ -92,13 +95,8 @@ public final class DeepOres {
             if (!anchored && outcome <= 0) continue;
 
             PlacedFeature rebuilt = PlacedFeature.DIRECT_CODEC.parse(ops, encoded)
-                    .resultOrPartial(err -> LOG.warn("rewrite rejected for {}: {}",
-                            ref.key().location(), err))
-                    .orElse(null);
-            if (rebuilt == null) {
-                failed++;
-                continue;
-            }
+                    .getOrThrow(error -> new IllegalStateException(
+                            "The height range of " + ref.key().location() + " could not be rewritten: " + error));
 
             ((HolderReferenceAccessor<PlacedFeature>) ref).terrainDiffusion$bindValue(rebuilt);
             if (anchored) pinned++;
@@ -293,7 +291,7 @@ public final class DeepOres {
         }
         JsonObject added = new JsonObject();
         added.addProperty("type", "minecraft:count");
-        added.addProperty("count", Math.max(1, (int) Math.round(factor)));
+        added.addProperty("count", scaled(1, factor));
         JsonArray reordered = new JsonArray();
         reordered.add(added);
         for (JsonElement element : placement) reordered.add(element);
@@ -304,7 +302,7 @@ public final class DeepOres {
         JsonElement value = count.get("count");
         if (value == null) return;
         if (value.isJsonPrimitive()) {
-            count.addProperty("count", Math.max(1, (int) Math.round(value.getAsInt() * factor)));
+            count.addProperty("count", scaled(value.getAsInt(), factor));
             return;
         }
         if (!value.isJsonObject()) return;
@@ -316,8 +314,7 @@ public final class DeepOres {
                 JsonObject wrapper = entry.getAsJsonObject();
                 JsonElement data = wrapper.get("data");
                 if (data != null && data.isJsonPrimitive()) {
-                    wrapper.addProperty("data",
-                            Math.max(1, (int) Math.round(data.getAsInt() * factor)));
+                    wrapper.addProperty("data", scaled(data.getAsInt(), factor));
                 }
             }
             return;
@@ -328,9 +325,12 @@ public final class DeepOres {
                 : inner;
         for (String key : List.of("min_inclusive", "max_inclusive", "value")) {
             if (bounds.has(key) && bounds.get(key).isJsonPrimitive()) {
-                bounds.addProperty(key,
-                        Math.max(1, (int) Math.round(bounds.get(key).getAsInt() * factor)));
+                bounds.addProperty(key, scaled(bounds.get(key).getAsInt(), factor));
             }
         }
+    }
+
+    private static int scaled(int count, double factor) {
+        return Math.max(1, Math.min(MAX_COUNT, (int) Math.round(count * factor)));
     }
 }

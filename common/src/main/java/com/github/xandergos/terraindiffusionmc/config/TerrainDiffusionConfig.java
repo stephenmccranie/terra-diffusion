@@ -8,6 +8,8 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Properties;
+import java.util.Set;
+import java.util.TreeSet;
 
 public final class TerrainDiffusionConfig {
     private static final String FILE_NAME = "terrain-diffusion-mc.properties";
@@ -23,10 +25,17 @@ public final class TerrainDiffusionConfig {
                 throw new IllegalStateException("Bundled config " + RESOURCE_PATH + " is missing");
             }
             PROPERTIES.load(defaults);
+            Set<String> known = Set.copyOf(PROPERTIES.stringPropertyNames());
             Files.createDirectories(configPath.getParent());
             if (Files.exists(configPath)) {
                 try (InputStream overrides = Files.newInputStream(configPath)) {
                     PROPERTIES.load(overrides);
+                }
+                Set<String> unread = new TreeSet<>(PROPERTIES.stringPropertyNames());
+                unread.removeAll(known);
+                if (!unread.isEmpty()) {
+                    throw new IllegalStateException(configPath + " sets keys this build does not read: " + unread
+                            + ". Remove them.");
                 }
             } else {
                 try (InputStream copy = TerrainDiffusionConfig.class.getResourceAsStream(RESOURCE_PATH)) {
