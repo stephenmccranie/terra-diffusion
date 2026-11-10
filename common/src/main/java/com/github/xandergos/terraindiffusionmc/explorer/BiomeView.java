@@ -4,7 +4,6 @@ import com.github.xandergos.terraindiffusionmc.pipeline.BiomeClassifier;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.SurfaceBiomes;
 import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipelineModelConfig;
-import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -32,7 +31,7 @@ final class BiomeView {
         if (last != null && last.key.equals(key)) {
             return last;
         }
-        int scale = WorldScaleManager.getCurrentScale();
+        int scale = LocalTerrainProvider.getInstance().scale;
         int m = BiomeClassifier.LANDFORM_MARGIN, ww = w + 2 * m, wh = h + 2 * m;
         float[][] raw = LocalTerrainProvider.explorerData(i0 - m, j0 - m, i0 + h + m, j0 + w + m, true);
         int pw = w + 2, ph = h + 2;

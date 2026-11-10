@@ -85,20 +85,6 @@ public final class TerrainDiffusionConfig {
         return readBoolean("terralith.enabled");
     }
 
-    public static boolean scaleStructureSpacing(boolean savedPolicy) {
-        return resolveStructureSpacing(readString("structures.scale_spacing"), savedPolicy);
-    }
-
-    static boolean resolveStructureSpacing(String setting, boolean savedPolicy) {
-        return switch (setting) {
-            case "auto" -> savedPolicy;
-            case "true" -> true;
-            case "false" -> false;
-            default -> throw new IllegalArgumentException(
-                    "structures.scale_spacing must be auto, true or false; got: " + setting);
-        };
-    }
-
     public static boolean terralithInjectSurfaceRules() {
         return readBoolean("terralith.inject_surface_rules");
     }
@@ -151,26 +137,6 @@ public final class TerrainDiffusionConfig {
     // Radius of the slick an oil well leaves at the surface
     public static int tfmgWellPoolRadius() {
         return readInt("tfmg.oil_well_pool_radius");
-    }
-
-    // Model height, in metres, below which the land's large shape keeps its height
-    public static float reliefStartM() {
-        return readFloat("relief.start");
-    }
-
-    // Model height, in metres, from which the large shape rises relief.gain metres per metre
-    public static float reliefFullM() {
-        return readFloat("relief.full");
-    }
-
-    // How many times as fast the large shape rises above relief.full; 1 keeps the model's heights
-    public static float reliefGain() {
-        return readFloat("relief.gain");
-    }
-
-    // Further rise of ground above its surroundings, as a share of how far it stands above them
-    public static float reliefPeaks() {
-        return readFloat("relief.peaks");
     }
 
     // Tile side length in blocks: a power of two, and at least a chunk

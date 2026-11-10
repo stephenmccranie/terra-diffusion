@@ -6,7 +6,6 @@ import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithCompat;
 import com.github.xandergos.terraindiffusionmc.pipeline.WaterNetwork;
 import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipelineModelConfig;
-import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.google.gson.Gson;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -125,7 +124,7 @@ public final class ExplorerServer {
             resp.put("seed", Long.toUnsignedString(LocalTerrainProvider.explorerSeed()));
             resp.put("channels", Arrays.asList(CHANNEL_NAMES));
             resp.put("native_resolution", NATIVE_RESOLUTION);
-            resp.put("scale", WorldScaleManager.getCurrentScale());
+            resp.put("scale", LocalTerrainProvider.getInstance().scale);
             sendJson(ex, 200, resp);
         } catch (Exception e) {
             sendError(ex, 500, e.getMessage());
@@ -386,7 +385,7 @@ public final class ExplorerServer {
         int i0 = getInt(q, "ci", 0) * 256 + getInt(q, "pan_i", 0) - detailSize / 2;
         int j0 = getInt(q, "cj", 0) * 256 + getInt(q, "pan_j", 0) - detailSize / 2;
         return i0 + ":" + j0 + ":" + detailSize + ":" + LocalTerrainProvider.explorerSeed() + ":"
-                + WorldScaleManager.getCurrentScale();
+                + LocalTerrainProvider.getInstance().scale;
     }
 
     private static BiomeView.Result biomeResult(Map<String, String> q) throws Exception {
@@ -398,7 +397,7 @@ public final class ExplorerServer {
         int i0 = ci * 256 + panI - detailSize / 2;
         int j0 = cj * 256 + panJ - detailSize / 2;
         String key = i0 + ":" + j0 + ":" + detailSize + ":" + LocalTerrainProvider.explorerSeed() + ":"
-                + WorldScaleManager.getCurrentScale() + ":" + TerralithCompat.isActive();
+                + LocalTerrainProvider.getInstance().scale + ":" + TerralithCompat.isActive();
         return BiomeView.get(key, i0, j0, detailSize, detailSize);
     }
 

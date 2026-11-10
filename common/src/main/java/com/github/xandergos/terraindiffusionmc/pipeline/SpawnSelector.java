@@ -2,7 +2,6 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.FloatTensor;
-import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import net.minecraft.core.BlockPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -20,7 +19,7 @@ public final class SpawnSelector {
     public static BlockPos findSpawnBlockPos() {
         int initialSize = TerrainDiffusionConfig.spawnSearchInitialSize();
         int maxSize = TerrainDiffusionConfig.spawnSearchMaxSize();
-        int scale = WorldScaleManager.getCurrentScale();
+        int scale = LocalTerrainProvider.getInstance().scale;
 
         for (int regionSize = initialSize; regionSize <= maxSize; regionSize += 8) {
             int halfSize = regionSize / 2;
@@ -31,13 +30,7 @@ public final class SpawnSelector {
             int cj1 = halfSize;
 
             LOG.info("Querying coarse map to find spawn. Region size: {} x {}", regionSize, regionSize);
-            FloatTensor coarse;
-            try {
-                coarse = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
-            } catch (Exception e) {
-                LOG.error("SpawnSelector: failed to query coarse map at size {}", regionSize, e);
-                continue;
-            }
+            FloatTensor coarse = LocalTerrainProvider.getPipelineCoarse(ci0, cj0, ci1, cj1);
 
             int H = ci1 - ci0;
             int W = cj1 - cj0;

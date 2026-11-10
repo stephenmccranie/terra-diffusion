@@ -1,12 +1,19 @@
 {
   "dimensions": {
     "minecraft:overworld": {
-      "type": "terrain-diffusion-mc:terrain_diffusion",
+      "type": "terrain-diffusion-mc:terrain_diffusion_scale_2",
       "generator": {
         "type": "minecraft:noise",
         "settings": "terrain-diffusion-mc:terrain_diffusion",
         "biome_source": {
-          "type": "terrain-diffusion-mc:terrain_diffusion"
+          "type": "terrain-diffusion-mc:terrain_diffusion",
+          "scale": 2,
+          "relief": {
+            "start": 300,
+            "full": 1200,
+            "gain": 2.5,
+            "peaks": 0.8
+          }
         }
       }
     },

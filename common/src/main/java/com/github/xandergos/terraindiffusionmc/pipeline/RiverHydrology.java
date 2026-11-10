@@ -1052,7 +1052,7 @@ public final class RiverHydrology {
         float[] runoff = waterBalance(pipeline, li0 * lc, lj0 * lc, cg, lc)[0];
         for (int k = 0; k < cn; k++) {
             float m = Math.signum(height[k]) * height[k] * height[k];
-            height[k] = WorldPipeline.RELIEF.apply(m, m);
+            height[k] = pipeline.relief.apply(m, m);
         }
 
         // Priority flood from the coarse map's edge and the sea; each cell drains to the cell it was reached

@@ -4,6 +4,7 @@ import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.datafixers.util.Pair;
+import com.mojang.serialization.Codec;
 import com.mojang.serialization.MapCodec;
 import com.mojang.serialization.codecs.RecordCodecBuilder;
 import net.minecraft.core.BlockPos;
@@ -21,6 +22,7 @@ import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.biome.Climate;
 
 import com.github.xandergos.terraindiffusionmc.pipeline.CaveBiomes;
+import com.github.xandergos.terraindiffusionmc.pipeline.Relief;
 import com.github.xandergos.terraindiffusionmc.pipeline.SurfaceBiomes;
 import com.github.xandergos.terraindiffusionmc.pipeline.TerralithCompat;
 
@@ -33,19 +35,48 @@ import java.util.function.Predicate;
 import java.util.stream.Stream;
 
 public class TerrainDiffusionBiomeSource extends BiomeSource {
-    public static final MapCodec<TerrainDiffusionBiomeSource> CODEC = RecordCodecBuilder.mapCodec((instance) ->
+    public static final int MAX_SCALE = 6;
+
+    private static final Codec<Relief> RELIEF_CODEC = RecordCodecBuilder.create(instance -> instance.group(
+            Codec.FLOAT.fieldOf("start").forGetter(Relief::start),
+            Codec.FLOAT.fieldOf("full").forGetter(Relief::full),
+            Codec.FLOAT.fieldOf("gain").forGetter(Relief::gain),
+            Codec.FLOAT.fieldOf("peaks").forGetter(Relief::peaks)
+    ).apply(instance, Relief::new));
+
+    // With the seed, these two are the whole shape of a world, and they are saved with it: scale is how many
+    // blocks span one pixel of the model's 30 m grid, relief how the model's heights become the world's
+    public static final MapCodec<TerrainDiffusionBiomeSource> CODEC = RecordCodecBuilder.mapCodec(instance ->
             instance.group(
-                    RegistryOps.retrieveGetter(Registries.BIOME)
+                    RegistryOps.retrieveGetter(Registries.BIOME),
+                    Codec.intRange(1, MAX_SCALE).fieldOf("scale").forGetter(TerrainDiffusionBiomeSource::scale),
+                    RELIEF_CODEC.fieldOf("relief").forGetter(TerrainDiffusionBiomeSource::relief)
             ).apply(instance, instance.stable(TerrainDiffusionBiomeSource::new)));
 
     private final HolderGetter<Biome> biomeLookup;
+    private final int scale;
+    private final Relief relief;
     // By tile id and by CaveBiomes index; null where this world has no such biome
     private Holder<Biome>[] surfaceBiomes;
     private Holder<Biome>[] caveBiomes;
     private boolean terralith;
 
-    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup) {
+    public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomeLookup, int scale, Relief relief) {
         this.biomeLookup = biomeLookup;
+        this.scale = scale;
+        this.relief = relief;
+    }
+
+    public int scale() {
+        return scale;
+    }
+
+    public Relief relief() {
+        return relief;
+    }
+
+    public TerrainDiffusionBiomeSource withScale(int scale) {
+        return new TerrainDiffusionBiomeSource(biomeLookup, scale, relief);
     }
 
     @Override

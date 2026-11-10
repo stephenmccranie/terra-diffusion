@@ -1,7 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.mixin.HolderReferenceAccessor;
-import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipeline;
+import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
@@ -118,7 +118,7 @@ public final class DeepOres {
                                              HeightProvider height) {
         int y = height.sample(random, context);
         float base = TerrainWater.regionalBaseM(pos.getX(), pos.getZ());
-        if (y < STONE_FLOOR || !WorldPipeline.RELIEF.raises(base)) return Stream.of(pos.atY(y));
+        if (y < STONE_FLOOR || !LocalTerrainProvider.getInstance().relief.raises(base)) return Stream.of(pos.atY(y));
         double low = bandY(y, base);
         double span = bandY(y + 1, base) - low;
         int copies = (int) span + (random.nextDouble() < span - (int) span ? 1 : 0);
@@ -133,7 +133,8 @@ public final class DeepOres {
     private static double bandY(int y, float base) {
         float blockM = TerrainClimate.metresPerBlock();
         int sea = HeightConverter.SEA_LEVEL;
-        return sea + WorldPipeline.RELIEF.band((y - sea) * blockM, base, (STONE_FLOOR - sea) * blockM) / blockM;
+        return sea + LocalTerrainProvider.getInstance().relief.band((y - sea) * blockM, base, (STONE_FLOOR - sea) * blockM)
+                / blockM;
     }
 
     private static boolean hasHeightRange(JsonObject root) {

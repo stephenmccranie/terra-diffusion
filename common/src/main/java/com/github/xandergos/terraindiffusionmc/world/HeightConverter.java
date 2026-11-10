@@ -1,5 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
+import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
 import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipelineModelConfig;
 
 public class HeightConverter {
@@ -8,11 +9,11 @@ public class HeightConverter {
     private static final float MAX_OCEAN_DEPTH_BLOCKS = 196f;
 
     private static float getResolutionForScale(int configuredScale) {
-        return WorldPipelineModelConfig.nativeResolution() / WorldScaleManager.clampScale(configuredScale);
+        return WorldPipelineModelConfig.nativeResolution() / configuredScale;
     }
 
     public static int convertToMinecraftHeight(short meters) {
-        return convertToMinecraftHeight(meters, WorldScaleManager.getCurrentScale());
+        return convertToMinecraftHeight(meters, LocalTerrainProvider.getInstance().scale);
     }
 
     public static int convertToMinecraftHeight(short meters, int configuredScale) {

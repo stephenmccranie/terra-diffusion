@@ -4,8 +4,8 @@ import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.FloatTensor;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.InfiniteTensor;
 import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
-import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.Random;
 import java.util.Comparator;
@@ -119,7 +119,6 @@ public final class LocalTerrainProvider {
     }
 
     private static volatile LocalTerrainProvider INSTANCE;
-    private static volatile long instanceSeed;
 
     private static LocalTerrainProvider EXPLORER;
     private static volatile long explorerSeed;
@@ -127,29 +126,40 @@ public final class LocalTerrainProvider {
     private static volatile int explorerGeneration = -1;
     private static volatile int worldGeneration;
 
+    // A world's terrain is what its generator settings say of it: the seed, how many blocks span one pixel of
+    // the model's grid, and how the model's heights become the world's
+    private final long seed;
+    public final int scale;
+    public final Relief relief;
+    private final Path worldDir;
     private final WorldPipeline pipeline;
 
-    private LocalTerrainProvider(long seed, PipelineModels models, boolean readOnlyDisk) {
-        this.pipeline = new WorldPipeline(seed, models, readOnlyDisk);
+    private LocalTerrainProvider(long seed, int scale, Relief relief, Path worldDir, PipelineModels models,
+                                 boolean readOnlyDisk) {
+        this.seed = seed;
+        this.scale = scale;
+        this.relief = relief;
+        this.worldDir = worldDir;
+        this.pipeline = new WorldPipeline(seed, relief, worldDir, models, readOnlyDisk);
     }
 
     private static PipelineModels loadedModels() {
         PipelineModels.awaitLoad();
-        PipelineModels models = PipelineModels.getInstance();
-        if (models == null) throw new IllegalStateException("PipelineModels failed to load");
-        return models;
+        return PipelineModels.getInstance();
     }
 
-    public static synchronized void init(long seed) {
+    // Starts the terrain of a world that is loading, saved in worldDir
+    public static synchronized void init(long seed, int scale, Relief relief, Path worldDir) {
         DeepCaverns.setSeed(seed);
         CaveBiomes.setSeed(seed);
-        PipelineModels models = loadedModels();
-        if (INSTANCE == null) {
-            INSTANCE = new LocalTerrainProvider(seed, models, false);
-        } else {
-            INSTANCE.pipeline.setSeed(seed);
+        LocalTerrainProvider previous = INSTANCE;
+        if (previous != null) {
+            WorldPipeline.INFERENCE.call(() -> {
+                previous.pipeline.close();
+                return null;
+            });
         }
-        instanceSeed = seed;
+        INSTANCE = new LocalTerrainProvider(seed, scale, relief, worldDir, loadedModels(), false);
         CACHE.clear();
         worldGeneration++;
     }
@@ -178,17 +188,18 @@ public final class LocalTerrainProvider {
             if (EXPLORER != null) {
                 EXPLORER.pipeline.close();
             }
-            long seed = instanceSeed;
-            EXPLORER = new LocalTerrainProvider(seed, loadedModels(), true);
+            LocalTerrainProvider world = getInstance();
+            EXPLORER = new LocalTerrainProvider(world.seed, world.scale, world.relief, world.worldDir,
+                    loadedModels(), true);
             EXPLORER.pipeline.hydrology.buildSeamNeighbours(false);
-            explorerSeed = seed;
+            explorerSeed = world.seed;
             explorerGeneration = generation;
         }
         return EXPLORER;
     }
 
     public static long explorerSeed() {
-        return explorerGeneration == worldGeneration ? explorerSeed : instanceSeed;
+        return explorerGeneration == worldGeneration ? explorerSeed : getInstance().seed;
     }
 
     public static void setExplorerSeed(long newSeed) {
@@ -239,7 +250,7 @@ public final class LocalTerrainProvider {
                 return InfiniteTensor.cancellable(stale, () -> {
                     LocalTerrainProvider provider = explorer();
                     int H = i2 - i1, W = j2 - j1;
-                    int scale = WorldScaleManager.getCurrentScale();
+                    int scale = provider.scale;
                     float blockM = NATIVE_RESOLUTION / scale;
                     RiverHydrology.prepare(provider.pipeline, i1, j1, i2, j2, blockM);
                     float[] elev = provider.pipeline.get(i1, j1, i2, j2, false)[0];
@@ -314,7 +325,6 @@ public final class LocalTerrainProvider {
     // Computes a tile on this thread; only its tensor reads run on the inference thread
     private void generate(TileKey key, int size, CacheEntry entry) {
         try {
-            int scale = WorldScaleManager.getCurrentScale();
             float blockM = NATIVE_RESOLUTION / scale;
             int i1 = key.tileZ(), j1 = key.tileX();
             HeightmapData data = buildTile(key.tileX(), key.tileZ(), size, scale);

@@ -14,7 +14,6 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import com.github.xandergos.terraindiffusionmc.platform.PlatformPaths;
 
 // Java port of terrain_diffusion/inference/world_pipeline.py WorldPipeline
 public final class WorldPipeline implements AutoCloseable {
@@ -26,8 +25,6 @@ public final class WorldPipeline implements AutoCloseable {
 
     static final int LATENT_COMPRESSION = WorldPipelineModelConfig.latentCompression();
     static final float SIGMA_DATA = EDMScheduler.SIGMA_DATA;
-
-    public static final Relief RELIEF = Relief.fromConfig();
 
     static final int COARSE_TILE_SIZE   = 64;
     static final int COARSE_TILE_STRIDE = 48;
@@ -75,7 +72,6 @@ public final class WorldPipeline implements AutoCloseable {
     private final OnnxModel coarseModel;
     private final OnnxModel baseModel;
     private final OnnxModel decoderModel;
-    private final boolean ownModels;
     private volatile SyntheticMapFactory syntheticMapFactory;
     private volatile long seed;
 
@@ -84,42 +80,25 @@ public final class WorldPipeline implements AutoCloseable {
             TerrainDiffusionConfig.tileCacheMb() * 1024L * 1024L;
 
     final RiverHydrology.RegionCache hydrology = new RiverHydrology.RegionCache();
+    // How the model's heights become this world's
+    final Relief relief;
+    private final Path worldDir;
     private final boolean readOnlyDisk;
 
     final InfiniteTensor coarse;
     final InfiniteTensor latents;
     final InfiniteTensor residual;
 
-    // Uses models shared from PipelineModels
-    public WorldPipeline(long seed, PipelineModels models) {
-        this(seed, models, false);
-    }
-
-    // Uses shared models; readOnlyDisk opens the disk cache for reading only
-    public WorldPipeline(long seed, PipelineModels models, boolean readOnlyDisk) {
+    // The pipeline of one world, over the shared models. Its disk cache lives in the world's save; readOnlyDisk
+    // opens it for reading only.
+    public WorldPipeline(long seed, Relief relief, Path worldDir, PipelineModels models, boolean readOnlyDisk) {
         this.seed = seed & 0xFFFFFFFFFFFFFFFFL;
+        this.relief = relief;
+        this.worldDir = worldDir;
         this.readOnlyDisk = readOnlyDisk;
         this.coarseModel = models.getCoarseModel();
         this.baseModel = models.getBaseModel();
         this.decoderModel = models.getDecoderModel();
-        this.ownModels = false;
-        this.syntheticMapFactory = new SyntheticMapFactory(this.seed);
-        this.tileStore = new MemoryTileStore();
-        this.coarse = buildCoarseStage();
-        this.latents = buildLatentStage();
-        this.residual = buildDecoderStage();
-        attachDiskCache();
-    }
-
-    // Loads and owns its own models
-    public WorldPipeline(long seed) {
-        this.seed = seed & 0xFFFFFFFFFFFFFFFFL;
-        this.readOnlyDisk = false;
-        ModelAssetManager.ensureAssetsReady();
-        this.coarseModel = new OnnxModel(ModelAssetManager.resolveAssetPath("coarse_model.onnx"), "coarse");
-        this.baseModel = new OnnxModel(ModelAssetManager.resolveAssetPath("base_model.onnx"), "base");
-        this.decoderModel = new OnnxModel(ModelAssetManager.resolveAssetPath("decoder_model.onnx"), "decoder");
-        this.ownModels = true;
         this.syntheticMapFactory = new SyntheticMapFactory(this.seed);
         this.tileStore = new MemoryTileStore();
         this.coarse = buildCoarseStage();
@@ -458,7 +437,7 @@ public final class WorldPipeline implements AutoCloseable {
     float[][] heights(int i1, int j1, int i2, int j2) {
         float[][] elev = computeElev(i1, j1, i2, j2);
         float[] world = new float[elev[0].length];
-        for (int k = 0; k < world.length; k++) world[k] = RELIEF.apply(elev[0][k], elev[1][k]);
+        for (int k = 0; k < world.length; k++) world[k] = relief.apply(elev[0][k], elev[1][k]);
         return new float[][]{world, elev[0], elev[1]};
     }
 
@@ -679,13 +658,6 @@ public final class WorldPipeline implements AutoCloseable {
              + wy*(1-wx)*src[y1][x0] + wy*wx*src[y1][x1];
     }
 
-    private static volatile Path cacheRootOverride;
-
-    // Set from the world-load hook so the cache lives beside the save it belongs to
-    public static void setCacheRoot(Path worldDir) {
-        cacheRootOverride = worldDir;
-    }
-
     private DiskTileCache diskCache;
 
     // Points the tile store at the on-disk tier for the current seed
@@ -695,8 +667,7 @@ public final class WorldPipeline implements AutoCloseable {
             diskCache = null;
         }
         tileStore.setDiskCache(null);
-        Path base = cacheRootOverride != null ? cacheRootOverride : PlatformPaths.gameDir();
-        Path root = base.resolve("terradiff-cache").resolve(Long.toUnsignedString(seed));
+        Path root = worldDir.resolve("terradiff-cache").resolve(Long.toUnsignedString(seed));
         diskCache = readOnlyDisk
                 ? DiskTileCache.openReadOnly(root, pipelineFingerprint())
                 : DiskTileCache.open(root, pipelineFingerprint());
@@ -731,11 +702,6 @@ public final class WorldPipeline implements AutoCloseable {
         if (diskCache != null) {
             diskCache.close();
             diskCache = null;
-        }
-        if (ownModels) {
-            coarseModel.close();
-            baseModel.close();
-            decoderModel.close();
         }
     }
 }

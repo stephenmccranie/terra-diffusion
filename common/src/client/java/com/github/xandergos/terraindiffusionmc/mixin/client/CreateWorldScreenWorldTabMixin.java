@@ -4,11 +4,6 @@ import com.github.xandergos.terraindiffusionmc.client.WorldScaleSettingsScreen;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.screens.worldselection.CreateWorldScreen;
-import net.minecraft.client.gui.screens.worldselection.WorldCreationUiState;
-import net.minecraft.core.registries.Registries;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.resources.ResourceKey;
-import net.minecraft.world.level.levelgen.presets.WorldPreset;
 import org.spongepowered.asm.mixin.Final;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -26,9 +21,6 @@ public abstract class CreateWorldScreenWorldTabMixin {
 
     @Unique
     private CreateWorldScreen terrainDiffusionMc$createWorldScreen;
-
-    private static final ResourceKey<WorldPreset> TERRAIN_DIFFUSION_PRESET_KEY =
-            ResourceKey.create(Registries.WORLD_PRESET, ResourceLocation.fromNamespaceAndPath("terrain-diffusion-mc", "terrain_diffusion"));
 
     @Inject(method = "<init>", at = @At("RETURN"))
     private void terrainDiffusionMc$captureCreateWorldScreen(CreateWorldScreen createWorldScreen, CallbackInfo callbackInfo) {
@@ -49,28 +41,14 @@ public abstract class CreateWorldScreenWorldTabMixin {
         if (!isTerrainDiffusionWorldTypeSelected()) {
             return;
         }
-        Minecraft minecraftClient = Minecraft.getInstance();
-        if (minecraftClient != null && terrainDiffusionMc$createWorldScreen != null) {
-            minecraftClient.setScreen(new WorldScaleSettingsScreen(terrainDiffusionMc$createWorldScreen));
-            callbackInfo.cancel();
-        }
+        Minecraft.getInstance().setScreen(new WorldScaleSettingsScreen(terrainDiffusionMc$createWorldScreen));
+        callbackInfo.cancel();
     }
 
+    // Any world whose overworld this mod generates, whichever preset it came from
+    @Unique
     private boolean isTerrainDiffusionWorldTypeSelected() {
-        if (terrainDiffusionMc$createWorldScreen == null) {
-            return false;
-        }
-        WorldCreationUiState worldCreator = terrainDiffusionMc$createWorldScreen.getUiState();
-        if (worldCreator == null) {
-            return false;
-        }
-        WorldCreationUiState.WorldTypeEntry worldType = worldCreator.getWorldType();
-        if (worldType == null) {
-            return false;
-        }
-        if (worldType.preset().unwrapKey().map(TERRAIN_DIFFUSION_PRESET_KEY::equals).orElse(false)) {
-            return true;
-        }
-        return "terrain diffusion".equalsIgnoreCase(worldType.describePreset().getString());
+        return WorldScaleSettingsScreen.hasTerrain(
+                terrainDiffusionMc$createWorldScreen.getUiState().getSettings().selectedDimensions());
     }
 }

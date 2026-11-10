@@ -11,9 +11,7 @@ import com.github.xandergos.terraindiffusionmc.world.DeepOres;
 import com.github.xandergos.terraindiffusionmc.world.TfmgCompat;
 import com.github.xandergos.terraindiffusionmc.world.TerralithSnow;
 import com.github.xandergos.terraindiffusionmc.world.TerralithSurfaceRules;
-import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.github.xandergos.terraindiffusionmc.world.ScaleAwareStructureState;
-import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.context.CommandContext;
 import net.minecraft.commands.CommandSourceStack;
@@ -24,7 +22,6 @@ import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.storage.LevelResource;
-import com.github.xandergos.terraindiffusionmc.pipeline.WorldPipeline;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.biome.BiomeSource;
 import net.minecraft.world.level.levelgen.DensityFunction;
@@ -89,23 +86,15 @@ public final class TerrainDiffusionLifecycle {
     // Called by each loader when a server level is loaded. A Terrain Diffusion world is an overworld generated
     // from the mod's biome source; nothing here touches any other world.
     public static void onWorldLoad(ServerLevel world) {
-        if (world.dimension() != Level.OVERWORLD) {
+        if (world.dimension() != Level.OVERWORLD
+                || !(world.getChunkSource().getGenerator() instanceof NoiseBasedChunkGenerator generator)
+                || !(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource terrain)) {
             return;
         }
-        WorldScaleManager.initializeForWorld(world);
-        if (!(world.getChunkSource().getGenerator() instanceof NoiseBasedChunkGenerator generator)
-                || !(generator.getBiomeSource() instanceof TerrainDiffusionBiomeSource)) {
-            return;
-        }
-        var worldSettings = WorldScaleManager.settingsForWorld(world);
-        boolean scaleSpacing = TerrainDiffusionConfig.scaleStructureSpacing(worldSettings.scaleStructureSpacing());
-        worldSettings.setScaleStructureSpacing(scaleSpacing);
-        if (scaleSpacing) {
-            ((ScaleAwareStructureState) world.getChunkSource().getGeneratorState())
-                    .terrainDiffusion$configureStructureScale(WorldScaleManager.getCurrentScale(), world.registryAccess());
-        }
-        WorldPipeline.setCacheRoot(world.getServer().getWorldPath(LevelResource.ROOT));
-        LocalTerrainProvider.init(world.getSeed());
+        ((ScaleAwareStructureState) world.getChunkSource().getGeneratorState())
+                .terrainDiffusion$configureStructureScale(terrain.scale(), world.registryAccess());
+        LocalTerrainProvider.init(world.getSeed(), terrain.scale(), terrain.relief(),
+                world.getServer().getWorldPath(LevelResource.ROOT));
         TerralithSurfaceRules.apply(world);
         TerralithSnow.apply(world);
         DeepOres.apply(world);

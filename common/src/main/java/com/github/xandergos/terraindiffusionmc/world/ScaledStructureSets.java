@@ -33,15 +33,14 @@ public final class ScaledStructureSets {
 
     public ScaledStructureSets(List<Holder<StructureSet>> originals, List<Holder<StructureSet>> definitions,
                                int scale, DynamicOps<JsonElement> ops) {
-        int factor = WorldScaleManager.clampScale(scale);
         for (Holder<StructureSet> holder : definitions) {
             StructureSet original = holder.value();
-            if (factor == 1 || !holder.is(SCALE_WITH_TERRAIN)
+            if (scale == 1 || !holder.is(SCALE_WITH_TERRAIN)
                     || original.placement().getClass() != RandomSpreadStructurePlacement.class) {
                 continue;
             }
             StructurePlacement placement = placements.computeIfAbsent(original.placement(),
-                    value -> scale((RandomSpreadStructurePlacement) value, factor, ops));
+                    value -> scale((RandomSpreadStructurePlacement) value, scale, ops));
             Holder<StructureSet> replacement = Holder.direct(new StructureSet(original.structures(), placement));
             replacements.put(original, replacement);
         }

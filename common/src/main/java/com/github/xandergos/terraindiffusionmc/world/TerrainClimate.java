@@ -12,8 +12,7 @@ public final class TerrainClimate {
     }
 
     public static float metresPerBlock() {
-        return WorldPipelineModelConfig.nativeResolution()
-                / WorldScaleManager.clampScale(WorldScaleManager.getCurrentScale());
+        return WorldPipelineModelConfig.nativeResolution() / LocalTerrainProvider.getInstance().scale;
     }
 
     public static int seaLevelY() {
@@ -22,10 +21,11 @@ public final class TerrainClimate {
 
     // Sea-level air in degrees Celsius for nx by nz columns from (x0, z0), step blocks apart, x varying fastest
     public static float[] seaLevelAirC(int x0, int z0, int step, int nx, int nz) {
-        int scale = WorldScaleManager.clampScale(WorldScaleManager.getCurrentScale());
+        LocalTerrainProvider terrain = LocalTerrainProvider.getInstance();
+        int scale = terrain.scale;
         int i1 = Math.floorDiv(z0, scale), j1 = Math.floorDiv(x0, scale);
         int i2 = Math.floorDiv(z0 + step * (nz - 1), scale) + 1, j2 = Math.floorDiv(x0 + step * (nx - 1), scale) + 1;
-        float[] box = LocalTerrainProvider.getInstance().seaLevelTemperature(i1, j1, i2, j2);
+        float[] box = terrain.seaLevelTemperature(i1, j1, i2, j2);
         int width = j2 - j1;
         float[] out = new float[nx * nz];
         for (int k = 0; k < nz; k++) {
