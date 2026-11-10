@@ -28,9 +28,9 @@ below the line keep their winter snow. Details in
 
 **Rivers.** Rivers are post-processed on top of the model's terrain. Each 1,024-pixel river region drains a window a region wider on every side, counting each cell by the runoff its climate leaves, and a coarse drainage map of the land beyond tells it how much water flows in. Filled depressions are exactly level, and water crosses them towards where they drain and away from the ground rising around them, so it gathers into one channel instead of ruled parallel lines. A river begins where a cell gathers a river's catchment. Its width grows with the square root of its discharge, as real rivers' do, so at scale 4 (7.5 m a block) it is as many blocks wide as a real river carrying the same water is metres; it runs deeper than real so boats and swimmers have water. Its water surface is graded from the mouth upstream: a block below the valley floor, never steeper than its discharge allows, and where that would cut more than three times the river's depth into the ground it climbs back to the valley floor in a waterfall. Water is placed still, so wherever a river's surface steps down a block or falls it spills over when its chunk first starts ticking, worlds generated earlier included: a step leaves a short rapid of flowing water that a boat can paddle up, a fall becomes a waterfall, and where a river or lake runs over a cave its water pours down into the cave instead of hanging over it. Flat rivers meander in sine waves about eleven widths long, as far as their valley floor lets them; steep ones run straight. A region keeps the stretches of river that start inside it, and a river crossing into the next region is pinned there to its valley's line, so neighbouring regions meet exactly without blending; about one crossing in twenty is a small stream only one of the two regions draws, which ends at the line. Every block column takes its ground and water from the cross-sections of the rivers near it: a channel holding the water, a floodplain cut flat a block above it that widens the flatter the river runs, and valley walls rising beyond. Terrain therefore never depends on how the world is split into tiles, so there are no straight walls along tile edges.
 
-**Taller mountains.** The model learned real-world heights, so its peaks rarely pass 4,000 m while each world's height assumes a 10,000 m peak. The land's large shape, about a kilometre across, keeps the model's height below 300 m, so coasts, rivers and farmland stay put; above that it rises ever faster, until from 1,200 m on it rises 2.5 m for every metre. Ground keeps its height above or below that shape, so slopes stay as buildable as the model made them, and ridges and summits standing above their surroundings rise a further 80%. A 2,000 m plateau stands about 3,900 m tall, a 3,000 m summit on it about 5,700 m, and a valley cut 500 m into it stays 500 m deep; heights ease towards 9,800 m and never pass it. The curve is set by the `relief.*` keys below. Climate keeps the model's heights, so climate zones stay where the model put them, while snow, ice, tree lines and bare rock follow the raised ground: its air is 6.5 °C colder for every kilometre the ground was raised.
+**Taller mountains.** The model learned real-world heights, so its peaks rarely pass 4,000 m while each world's height assumes a 10,000 m peak. The land's large shape, about a kilometre across, keeps the model's height below 300 m, so coasts, rivers and farmland stay put; above that it rises ever faster, until from 1,200 m on it rises 2.5 m for every metre. Ground keeps its height above or below that shape, so slopes stay as buildable as the model made them, and ridges and summits standing above their surroundings rise a further 80%. A 2,000 m plateau stands about 3,900 m tall, a 3,000 m summit on it about 5,700 m, and a valley cut 500 m into it stays 500 m deep; heights ease towards 9,800 m and never pass it. The curve is the world's `relief` (see [Per-world settings](#per-world-settings)). Climate keeps the model's heights, so climate zones stay where the model put them, while snow, ice, tree lines and bare rock follow the raised ground: its air is 6.5 °C colder for every kilometre the ground was raised.
 
-**Ores rise with the land.** Vanilla places ores and other underground features in height bands made for unraised ground. Where the height curve lifts the land (its large shape above `relief.start`), each band rises with it: a band at vanilla Y y lies where the curve puts model height (y − 63) blocks over that place's large shape, so above sea level a band keeps its depth under the ground and is stretched like the summits over it, and bands agree between a ridge and the valley beside it. The rock the lift puts under the land, between Y 8 and sea level, holds the bands vanilla places there stretched over it. Each band places as many more features as it is stretched, keeping vanilla's density. Deepslate, and land the curve leaves alone, keep vanilla's heights; ore bands also reach down to the -192 floor.
+**Ores rise with the land.** Vanilla places ores and other underground features in height bands made for unraised ground, and so do the mods and datapacks written for its world: a height counted from the world's floor or ceiling is read as vanilla's, from Y -64 to 319. Where the height curve lifts the land (its large shape above the relief's `start`), each band rises with it: a band at vanilla Y y lies where the curve puts model height (y − 63) blocks over that place's large shape, so above sea level a band keeps its depth under the ground and is stretched like the summits over it, and bands agree between a ridge and the valley beside it. The rock the lift puts under the land, between Y 8 and sea level, holds the bands vanilla places there stretched over it. Each band places as many more features as it is stretched, keeping vanilla's density. Deepslate, and land the curve leaves alone, keep vanilla's heights; ore bands also reach down to the -192 floor.
 
 **Lakes** are made similar to rivers, filling depressions elegible for holding water to create deep and vast lakes, or small and contained depending on their area of generation.
 
@@ -71,6 +71,9 @@ Then:
 3. Create a world, pick the **Terrain Diffusion** world type, and click **Customize** to set
    `World Scale` (see [Per-world settings](#per-world-settings)).
 
+A world made by an earlier build of this fork has no scale or height curve saved in it and does not load;
+start a fresh world.
+
 **Using the CUDA build?** Read [CUDA_INSTALL.md](CUDA_INSTALL.md) first.
 
 ## Exploring the world
@@ -102,15 +105,6 @@ validate_model=true
 # Port for the local terrain explorer web UI (/td-explore).
 explorer.port=19801
 
-# How the model's heights become world heights; see Taller mountains above. The land's large shape
-# keeps its height below relief.start metres and, from relief.full on, rises relief.gain metres per
-# metre of the model's; ground standing above its surroundings rises a further relief.peaks times as
-# far. relief.gain=1 with relief.peaks=0 keeps the model's heights. Set these before generating.
-relief.start=300
-relief.full=1200
-relief.gain=2.5
-relief.peaks=0.8
-
 # Spawn search: coarse-pixel region sizes for finding a land spawn near (0, 0).
 # Starts at initial_size x initial_size and expands by 8 each step up to max_size x max_size.
 # Each coarse pixel covers a large area (hundreds of blocks), so 16–128 is typically sufficient.
@@ -131,7 +125,7 @@ terralith.enabled=true
 terralith.inject_surface_rules=true
 ```
 
-The `relief.*` keys and the last four keys are specific to this fork.
+The last four keys are specific to this fork.
 
 ### Terralith compatibility
 
@@ -139,11 +133,13 @@ Terralith places biomes by extending the vanilla multi-noise biome parameter lis
 
 ### Per-world settings
 
-For Terrain Diffusion worlds, click **Customize** during world creation and set:
+A Terrain Diffusion world keeps its scale and its height curve in its own generator settings, saved with
+the world, so two worlds on one install can differ and a world never changes shape under a new config.
+Click **Customize** during world creation and set:
 
 - `World Scale` (integer `1..6`)
 
-Saved with the world. It controls:
+It controls:
 
 - how many real-world meters each block represents (`scale=1` → `30 m/block`, `scale=2` →
   `15 m/block`, and so on)
@@ -152,6 +148,25 @@ Saved with the world. It controls:
 2 is a good balance. Use 1 for smaller, more compressed worlds. Lower values lean on the GPU
 (the model runs more often); higher values lean on the CPU (taller worlds). 
 *I don't suggest using scale 5-6 unless you have a 64core cpu or something!*
+
+The height curve (see Taller mountains) is the `relief` of the generator's biome source. A server or
+datapack sets both in its world preset, with the dimension type `terrain_diffusion_scale_N` of the same scale:
+
+```json
+"biome_source": {
+  "type": "terrain-diffusion-mc:terrain_diffusion",
+  "scale": 2,
+  "relief": { "start": 300, "full": 1200, "gain": 2.5, "peaks": 0.8 }
+}
+```
+
+The land's large shape keeps its height below `start` metres and, from `full` on, rises `gain` metres per
+metre of the model's; ground standing above its surroundings rises a further `peaks` times as far.
+`"gain": 1` with `"peaks": 0` keeps the model's heights.
+
+The generated terrain is cached in the world folder under `terradiff-cache`. The cache records the models and
+settings it was made with; if they change, the world refuses to load rather than continue with terrain that
+would not match its chunks. Restore them, or delete the folder to regenerate it.
 
 ## Common issues
 
@@ -170,7 +185,7 @@ so allocate enough.
 
 **Terralith is installed but I see no Terralith biomes**
 
-Check the log at world load. The biome source logs how many Terralith biomes it resolved, and it deliberately falls back to the vanilla palette if any expected biome is missing rather than generating a half-broken world. A version mismatch between Terralith and this fork's biome table is the usual cause.
+Terralith's biomes are placed when Terralith is installed and `terralith.enabled` is true. If Terralith is installed but lacks a biome this fork places, the world refuses to load and names the missing biomes rather than generating a half-broken world. A version mismatch between Terralith and this fork's biome table is the usual cause.
 
 For anything in the base mod, use
 [upstream's issue tracker](https://github.com/xandergos/terrain-diffusion-mc/issues). For the
