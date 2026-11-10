@@ -146,8 +146,13 @@ public final class TerralithClassifier {
         return Math.max(heat, BOREAL);
     }
 
+    // Forest shows its winter snow; treeless ground above the tree line shows only snow the summer leaves
+    private static boolean snowy(TerrainSample s) {
+        return s.aboveTreeLine ? s.permanentSnow : s.frost < SNOW_LINE_C;
+    }
+
     public static short river(TerrainSample s) {
-        if (s.frost < SNOW_LINE_C) return FROZEN_RIVER;
+        if (snowy(s)) return FROZEN_RIVER;
         if (s.tReg >= WARM_SEA_C) return WARM_RIVER;
         return RIVER;
     }
@@ -159,8 +164,7 @@ public final class TerralithClassifier {
 
         int zoneHeat = classOf(s.tReg, HEAT_EDGES_C);
         int wet = classOf(s.moist, WET_EDGES);
-        // Forest shows its winter snow; treeless ground above the tree line shows only snow the summer leaves
-        boolean snowy = s.aboveTreeLine ? s.permanentSnow : s.frost < SNOW_LINE_C;
+        boolean snowy = snowy(s);
 
         if (s.elev < SHORE_BLOCKS * TerrainClimate.metresPerBlock() && s.seaShare >= SHORE_SEA_SHARE) {
             if (s.slope >= STEEP) return STONY_SHORE;

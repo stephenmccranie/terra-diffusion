@@ -62,9 +62,8 @@ public final class BiomeClassifier {
     // Native pixels the land's shape is averaged over: what reads as a slope, a rise or a shore
     public static final int LANDFORM_RADIUS = 6;
 
-    // Native pixels a box is read beyond what it uses, so the averages stay four pixels clear of its edge,
-    // whose values depend on the box
-    public static final int LANDFORM_MARGIN = LANDFORM_RADIUS + 4;
+    // Native pixels a box is read beyond what it uses: the averaging reach and the one-pixel border
+    public static final int LANDFORM_MARGIN = LANDFORM_RADIUS + 1;
 
     // The land's shape at a grid's pixels: world height averaged over LANDFORM_RADIUS with a one-pixel border,
     // how far the world raised the ground on the same average, and the share of sea within that reach
@@ -401,10 +400,7 @@ public final class BiomeClassifier {
         if (useTerralith) {
             return TerralithClassifier.river(s);
         }
-        if (s.airC <= -3f) {
-            return FROZEN_RIVER;
-        }
-        return RIVER;
+        return s.hasSnow ? FROZEN_RIVER : RIVER;
     }
 
     private static short classifyVanilla(TerrainSample s) {
@@ -427,7 +423,7 @@ public final class BiomeClassifier {
                 else biome = SNOWY_TAIGA;
             } else if (s.treesNone) {
                 if (s.barren) biome = WINDSWEPT_HILLS;
-                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE;
+                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE_DRY;
                 else biome = PLAINS;
             } else if (s.treesSparse || s.treesForest) {
                 biome = TAIGA_SPARSE;
@@ -442,8 +438,8 @@ public final class BiomeClassifier {
                 biome = (s.treesSparse || s.treesForest) ? SNOWY_TAIGA_SPARSE : SNOWY_TAIGA;
             } else if (s.treesNone) {
                 if (s.warm || s.hot) biome = DESERT;
-                else if (s.barren && !s.lowland && (s.cold || s.cool || s.temperate)) biome = GROVE;
-                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE;
+                else if (s.barren && !s.lowland && (s.cold || s.cool || s.temperate)) biome = GROVE_DRY;
+                else if (s.treeMoisture < 0.35f || s.precip < 350f) biome = GROVE_DRY;
                 else biome = PLAINS;
             } else if (s.treesSparse || s.treesForest) {
                 if (s.hot) biome = JUNGLE;

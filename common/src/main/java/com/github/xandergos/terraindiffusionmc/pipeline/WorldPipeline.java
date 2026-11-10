@@ -10,9 +10,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.Callable;
 import java.util.stream.Collectors;
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 
 // Java port of terrain_diffusion/inference/world_pipeline.py WorldPipeline
@@ -447,7 +444,9 @@ public final class WorldPipeline implements AutoCloseable {
         int lc = LATENT_COMPRESSION;
         float sigma = 5.0f;
         int ks = ((int) (sigma * 2) / 2) * 2 + 1;
-        int padLr = ks / 2 + 1;
+        // The decode extrapolates one low-resolution pixel past the padded edge, the blur spreads that over its
+        // radius, and the resize back up reads one pixel further: everything nearer the edge depends on the box
+        int padLr = ks / 2 + 2;
         int padHr = padLr * lc;
 
         // Align padding to lc-pixel grid
@@ -674,9 +673,11 @@ public final class WorldPipeline implements AutoCloseable {
         tileStore.setDiskCache(diskCache);
     }
 
+    // Everything the cached tensors depend on
     private static String pipelineFingerprint() {
         StringBuilder sb = new StringBuilder();
         sb.append("v1")
+          .append(";models=").append(ModelAssetManager.identity())
           .append(";latentCompression=").append(LATENT_COMPRESSION)
           .append(";coarseTile=").append(COARSE_TILE_SIZE)
           .append(";coarseStride=").append(COARSE_TILE_STRIDE)
@@ -685,15 +686,6 @@ public final class WorldPipeline implements AutoCloseable {
           .append(";stds=").append(java.util.Arrays.hashCode(MODEL_STDS))
           .append(";condSnr=").append(java.util.Arrays.toString(COND_SNR))
           .append(";frequencyMult=").append(java.util.Arrays.toString(WorldPipelineModelConfig.frequencyMultipliers()));
-        for (String model : new String[]{"coarse_model.onnx", "base_model.onnx", "decoder_model.onnx"}) {
-            sb.append(';').append(model).append('=');
-            try {
-                Path p = ModelAssetManager.resolveAssetPath(model);
-                sb.append(Files.size(p)).append('@').append(Files.getLastModifiedTime(p).toMillis());
-            } catch (IOException e) {
-                throw new UncheckedIOException("Model file unreadable: " + model, e);
-            }
-        }
         return sb.toString();
     }
 

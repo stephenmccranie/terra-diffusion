@@ -72,20 +72,21 @@ public final class DiskTileCache implements AutoCloseable {
         }
     }
 
-    // Opens the cache for fingerprint, discarding anything written under a different one
+    // Opens the cache for fingerprint. One written under another holds terrain these models and settings would
+    // not make, and may be all that is left of what made the world's chunks, so it is refused rather than replaced
     public static DiskTileCache open(Path root, String fingerprint) {
         try {
             Path manifest = root.resolve(MANIFEST);
             String existing = Files.isRegularFile(manifest)
                     ? Files.readString(manifest, StandardCharsets.UTF_8).trim()
                     : null;
-            boolean usable = fingerprint.equals(existing);
-            if (!usable && existing != null) {
-                LOG.info("Terrain cache fingerprint changed, discarding {}", root);
-                deleteTree(root);
+            if (existing != null && !fingerprint.equals(existing)) {
+                throw new IllegalStateException("The terrain cache at " + root + " was written with other models or "
+                        + "settings, so its terrain is not what this world would now generate. Restore them, or "
+                        + "delete the folder to rebuild it.\n  cache: " + existing + "\n  now:   " + fingerprint);
             }
             DiskTileCache cache = new DiskTileCache(root, fingerprint, false);
-            if (usable) {
+            if (existing != null) {
                 cache.manifestWritten = true;
                 long[] found = cache.measure();
                 cache.bytesOnDisk.set(found[0]);
@@ -288,26 +289,6 @@ public final class DiskTileCache implements AutoCloseable {
             return new long[]{0, 0};
         }
         return total;
-    }
-
-
-    private static void deleteTree(Path dir) throws IOException {
-        if (!Files.exists(dir)) {
-            return;
-        }
-        Files.walkFileTree(dir, new SimpleFileVisitor<>() {
-            @Override
-            public FileVisitResult visitFile(Path f, BasicFileAttributes a) throws IOException {
-                Files.deleteIfExists(f);
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            public FileVisitResult postVisitDirectory(Path d, IOException e) throws IOException {
-                Files.deleteIfExists(d);
-                return FileVisitResult.CONTINUE;
-            }
-        });
     }
 
     @Override

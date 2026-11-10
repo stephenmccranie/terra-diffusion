@@ -1,5 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
+
 import java.util.Arrays;
 
 public final class KarstHydrology {
@@ -88,13 +90,6 @@ public final class KarstHydrology {
     private KarstHydrology() {
     }
 
-    private static int toY(float metres, float blockM) {
-        if (metres >= 0f) return (int) (metres / blockM) + 63;
-        float depthBlocks = -metres / blockM;
-        float limited = 196f * depthBlocks / (depthBlocks + 196f);
-        return -((int) limited) - 1 + 63;
-    }
-
     public static KarstNetwork solve(int regionI, int regionJ,
                                      int windowI, int windowJ, int grid,
                                      float[] elev, float[] acc, boolean[] channel,
@@ -123,7 +118,7 @@ public final class KarstHydrology {
             int rowK = u * kn;
             for (int v = 0; v < kn; v++) {
                 int w = rowW + v;
-                groundY[rowK + v] = (short) toY(elev[w], blockM);
+                groundY[rowK + v] = (short) HeightConverter.toY(elev[w], blockM);
                 float lvl = water[w];
                 boolean wet = !Float.isNaN(lvl) && lvl > elev[w];
                 if (!wet) {
@@ -134,7 +129,7 @@ public final class KarstHydrology {
                     }
                 }
                 if (wet) {
-                    srcY[rowK + v] = toY(lvl, blockM);
+                    srcY[rowK + v] = HeightConverter.toY(lvl, blockM);
                     dist[rowK + v] = 0f;
                     anySource = true;
                 }
@@ -218,7 +213,7 @@ public final class KarstHydrology {
                 if (acc[w] < SPRING_MIN_ACC) continue;
                 if (u / hs >= nxz || v / hs >= nxz) continue;
                 int col = (u / hs) * nxz + (v / hs);
-                int y = toY(water[w], blockM) - (int) SPRING_DROP_BLOCKS;
+                int y = HeightConverter.toY(water[w], blockM) - (int) SPRING_DROP_BLOCKS;
                 int k = level(y, vstep, K);
                 if (k < 0) continue;
                 if (springLevel[col] < 0 || k < springLevel[col]) springLevel[col] = k;

@@ -62,6 +62,7 @@ public final class SurfaceBiomes {
     public static final short FOREST_SPARSE = land(108, "terrain-diffusion-mc:forest_sparse", 0x79C05A, 0x79C05A);
     public static final short TAIGA_SPARSE = land(115, "terrain-diffusion-mc:taiga_sparse", 0x86B783, 0x86B783);
     public static final short SNOWY_TAIGA_SPARSE = land(116, "terrain-diffusion-mc:snowy_taiga_sparse", 0x80B497, 0xC9DCD6);
+    public static final short GROVE_DRY = land(131, "terrain-diffusion-mc:grove_dry", 0xBFB755, 0xBFB755);
 
     // Terralith's, placed only in a world that has them all
     public static final short DEEP_WARM_OCEAN = water(200, "terralith:deep_warm_ocean", 0x8EB971, 0x1E6FA6);
