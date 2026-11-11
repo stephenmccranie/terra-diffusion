@@ -3,22 +3,24 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 import java.util.Arrays;
 
 // The river centrelines a region draws, as segments between points along each river with the water level, width,
-// depth and floodplain half-width at both ends. A region draws the segments that start in it, so each stretch of
+// depth and footslope at both ends. A region draws the segments that start in it, so each stretch of
 // river exists once and the rivers of neighbouring regions meet where one region's last segment ends on the other's
 // first. Where the two disagree, because each sees the land beyond its own window only coarsely, a river one region
 // carries over the line is drawn on as that region traced it (see drawn). A bucket index finds the segments near
 // a point.
 final class RiverNetwork {
 
-    // Floats per segment: native i, j, water level, width, depth and floodplain half-width at its upstream end, then
-    // at its downstream end
+    // Floats per segment: native i, j, water level, width, depth and footslope at its upstream end, then at its
+    // downstream end
     private static final int END = 6, STRIDE = 2 * END;
 
     private static final int BUCKET = 16;
 
-    // A river's floodplain reaches this many of its half-widths beyond its channel where it runs flat, and none
-    // where it falls this steeply or more
-    private static final float FLOODPLAIN_WIDTHS = 3f;
+    // A river's footslope is the distance beyond its bank at which its valley side has steepened to one in one
+    // (see WaterNetwork): this many of its half-widths where it falls STEEP_SLOPE or more, and this many more where
+    // it runs flat, so a steep river runs in a ravine and a flat one in a broad valley
+    private static final float FOOT_WIDTHS_STEEP = 1f;
+    private static final float FOOT_WIDTHS_FLAT = 2f;
     private static final float STEEP_SLOPE = 0.02f;
 
     // Points on either side over which a river's fall is measured
@@ -214,8 +216,8 @@ final class RiverNetwork {
             int[] out = pass == 0 ? null : new int[first[side * side]];
             for (int s = 0; s < count; s++) {
                 int o = s * STRIDE;
-                float r = WaterNetwork.reachM(Math.max(seg[o + 5], seg[o + END + 5]), blockM)
-                        / RiverHydrology.CELL_SIZE_M;
+                float r = WaterNetwork.reachM(Math.max(seg[o + 3], seg[o + END + 3]),
+                        Math.max(seg[o + 5], seg[o + END + 5]), blockM) / RiverHydrology.CELL_SIZE_M;
                 int b0 = bucket(Math.min(seg[o], seg[o + END]) - r - originI);
                 int b1 = bucket(Math.max(seg[o], seg[o + END]) + r - originI);
                 int c0 = bucket(Math.min(seg[o + 1], seg[o + END + 1]) - r - originJ);
@@ -241,12 +243,11 @@ final class RiverNetwork {
         return Math.max(0, Math.min(side - 1, (int) Math.floor(offset / BUCKET)));
     }
 
-    // Farthest a region's rivers reach past its edges, in native cells: its widest floodplain and walls beyond its
-    // widest meander, from the last of its points, a cell past its edge
+    // Farthest a region's rivers reach past its edges, in native cells: its widest valley side beyond its widest
+    // meander, from the last of its points, a cell past its edge
     static float reachCells(float blockM) {
-        float widest = 0.5f * MAX_WIDTH_M
-                * (1f + WaterNetwork.WIDTH_VARIATION + FLOODPLAIN_WIDTHS);
-        return 2f + MAX_MEANDER_CELLS + WaterNetwork.reachM(widest, blockM) / RiverHydrology.CELL_SIZE_M;
+        float foot = 0.5f * MAX_WIDTH_M * (FOOT_WIDTHS_STEEP + FOOT_WIDTHS_FLAT);
+        return 2f + MAX_MEANDER_CELLS + WaterNetwork.reachM(MAX_WIDTH_M, foot, blockM) / RiverHydrology.CELL_SIZE_M;
     }
 
     // Adds the point nearest (i, j) of every segment whose river shapes the ground there
@@ -262,10 +263,9 @@ final class RiverNetwork {
             float t = len2 > 0f ? Math.max(0f, Math.min(1f, ((i - ai) * di + (j - aj) * dj) / len2)) : 0f;
             float oi = ai + di * t - i, oj = aj + dj * t - j;
             float d = RiverHydrology.CELL_SIZE_M * (float) Math.sqrt(oi * oi + oj * oj);
-            float floodplain = lerp(seg[o + 5], seg[o + END + 5], t);
-            if (d >= WaterNetwork.reachM(floodplain, blockM)) continue;
-            out.add(d, lerp(seg[o + 2], seg[o + END + 2], t), lerp(seg[o + 3], seg[o + END + 3], t),
-                    lerp(seg[o + 4], seg[o + END + 4], t), floodplain);
+            float width = lerp(seg[o + 3], seg[o + END + 3], t), foot = lerp(seg[o + 5], seg[o + END + 5], t);
+            if (d >= WaterNetwork.reachM(width, foot, blockM)) continue;
+            out.add(d, lerp(seg[o + 2], seg[o + END + 2], t), width, lerp(seg[o + 4], seg[o + END + 4], t), foot);
         }
     }
 
@@ -424,7 +424,7 @@ final class RiverNetwork {
                 widthOut[i] = width[k];
             }
 
-            // A river spreads a floodplain and meanders the flatter it runs
+            // A river's valley opens out and it meanders the flatter it runs
             ch.run[0] = 0f;
             for (int p = 1; p < m; p++) {
                 ch.run[p] = ch.run[p - 1] + (float) Math.hypot(ch.ci[p] - ch.ci[p - 1], ch.cj[p] - ch.cj[p - 1]);
@@ -434,7 +434,7 @@ final class RiverNetwork {
                 float span = (ch.run[b] - ch.run[a]) * RiverHydrology.CELL_SIZE_M;
                 float fall = span > 0f ? (ch.lv[a] - ch.lv[b]) / span : 0f;
                 ch.flat[p] = Math.max(0f, 1f - fall / STEEP_SLOPE);
-                ch.fp[p] = 0.5f * ch.wd[p] * (1f + WaterNetwork.WIDTH_VARIATION + FLOODPLAIN_WIDTHS * ch.flat[p]);
+                ch.foot[p] = 0.5f * ch.wd[p] * (FOOT_WIDTHS_STEEP + FOOT_WIDTHS_FLAT * ch.flat[p]);
             }
 
             // Meanders swing between pins in whole half-waves. A pin is an end of the chain or a node where it
@@ -481,7 +481,7 @@ final class RiverNetwork {
                     seg[f + 2] = ch.lv[q];
                     seg[f + 3] = ch.wd[q];
                     seg[f + 4] = ch.dp[q];
-                    seg[f + 5] = ch.fp[q];
+                    seg[f + 5] = ch.foot[q];
                 }
             }
         }
@@ -489,11 +489,11 @@ final class RiverNetwork {
     }
 
     // The points of one chain as it is traced: where each is (its valley, then its channel), the direction across
-    // the valley there, the valley floor to either side in cells, its level, width, depth, flatness, floodplain
-    // half-width, distance down the valley and meander offset, the window cell it belongs to, and the node it is,
+    // the valley there, the valley floor to either side in cells, its level, width, depth, flatness, footslope,
+    // distance down the valley and meander offset, the window cell it belongs to, and the node it is,
     // or -1 for an end it shares with water or a larger stem
     private static final class Chain {
-        final float[] ci, cj, tmpI, tmpJ, ni, nj, roomPos, roomNeg, lv, wd, dp, flat, fp, run, y;
+        final float[] ci, cj, tmpI, tmpJ, ni, nj, roomPos, roomNeg, lv, wd, dp, flat, foot, run, y;
         final int[] at, node, half;
         int m;
 
@@ -510,7 +510,7 @@ final class RiverNetwork {
             wd = new float[cap];
             dp = new float[cap];
             flat = new float[cap];
-            fp = new float[cap];
+            foot = new float[cap];
             run = new float[cap];
             y = new float[cap];
             at = new int[cap];

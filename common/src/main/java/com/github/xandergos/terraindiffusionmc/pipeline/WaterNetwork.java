@@ -2,10 +2,12 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 
 // Shapes one column's ground and water from the rivers and lake fields at that column alone, so a column comes out
 // the same whichever tile computes it. Every river has the same cross-section about its centreline: a channel that
-// holds its water, a floodplain cut flat a bank above that water, and valley walls rising beyond the floodplain at a
-// fixed slope. A column inside a channel takes the water of the nearest channel holding it and is carved to the
-// deepest channel at that level; any other column is cut down to the lowest floodplain or wall over it, and never
-// left below the water of a channel beside it.
+// holds its water, a bank above that water, and beyond the bank a valley side that may rise as the square of the
+// distance out, the concave foot of a hillslope: level beside the river and steepening away from it. Ground already
+// lower keeps its shape, so a river crossing a plain leaves it alone and a river under a hill draws the hill down
+// to its bank without cutting a shelf into it. A column inside a channel takes the water of the nearest channel
+// holding it and is carved to the deepest channel at that level; any other column is cut down to the lowest valley
+// side over it, and never left below the water of a channel beside it.
 public final class WaterNetwork {
 
     public static final float NO_WATER = -1.0e9f;
@@ -23,13 +25,13 @@ public final class WaterNetwork {
     // Share of the half-width carved to full depth before the bed rises to the bank
     private static final float CHANNEL_FLAT_FRACTION = 0.55f;
 
-    // A floodplain lies this many blocks above its river's water
+    // A river's bank lies this many blocks above its water
     private static final float BANK_BLOCKS = 1f;
 
-    // Valley walls rise this many metres per metre beyond the floodplain, and cut ground up to this many blocks
-    // above it
-    private static final float WALL_SLOPE = 1.5f;
-    private static final float WALL_RISE_BLOCKS = 40f;
+    // A valley side stands above the bank by the square of the distance beyond the channel over twice the river's
+    // footslope, so it is as steep as that distance over the footslope, and it cuts ground up to this many blocks
+    // above the bank
+    private static final float VALLEY_RISE_BLOCKS = 40f;
 
     private static final float BANK_ROUGH_BLOCKS = 0.9f;
 
@@ -53,7 +55,7 @@ public final class WaterNetwork {
     }
 
     // The rivers near one column, each as the point of one of its segments nearest the column: the distance to it,
-    // and the water level, width, depth and floodplain half-width there, all in metres
+    // and the water level, width, depth and footslope there, all in metres
     static final class Reaches {
         private static final int FIELDS = 5;
         private float[] v = new float[FIELDS * 16];
@@ -63,14 +65,14 @@ public final class WaterNetwork {
             count = 0;
         }
 
-        void add(float distanceM, float levelM, float widthM, float depthM, float floodplainM) {
+        void add(float distanceM, float levelM, float widthM, float depthM, float footM) {
             if ((count + 1) * FIELDS > v.length) v = java.util.Arrays.copyOf(v, v.length * 2);
             int o = count++ * FIELDS;
             v[o] = distanceM;
             v[o + 1] = levelM;
             v[o + 2] = widthM;
             v[o + 3] = depthM;
-            v[o + 4] = floodplainM;
+            v[o + 4] = footM;
         }
     }
 
@@ -110,9 +112,10 @@ public final class WaterNetwork {
         return levelM > 0f ? snapToBlock(levelM, metersPerBlock) : 0f;
     }
 
-    // Farthest a river with this floodplain half-width shapes the ground, in metres
-    static float reachM(float floodplainM, float metersPerBlock) {
-        return floodplainM + WALL_RISE_BLOCKS * metersPerBlock / WALL_SLOPE;
+    // Farthest from its centreline a river of this width and footslope shapes the ground, in metres
+    static float reachM(float widthM, float footM, float metersPerBlock) {
+        return 0.5f * widthM * (1f + WIDTH_VARIATION)
+                + (float) Math.sqrt(2f * footM * VALLEY_RISE_BLOCKS * metersPerBlock);
     }
 
     public static void sample(int worldX, int worldZ, float elevM, float smoothElevM, Reaches rivers,
@@ -148,9 +151,9 @@ public final class WaterNetwork {
             int o = k * Reaches.FIELDS;
             float d = v[o];
             float halfWidth = 0.5f * v[o + 2] * widen;
-            float floodplain = Math.max(halfWidth, v[o + 4]);
+            float beyond = Math.max(0f, d - halfWidth);
             float w = water(v[o + 1], metersPerBlock);
-            near = Math.max(near, fadeOut(d / floodplain));
+            near = Math.max(near, fadeOut(beyond / v[o + 4]));
             if (d < halfWidth) {
                 if (Math.abs(w - surfaceM) > 0.5f * metersPerBlock) continue;
                 float inner = CHANNEL_FLAT_FRACTION * halfWidth;
@@ -159,7 +162,7 @@ public final class WaterNetwork {
                 channelBed = Math.min(channelBed, w - depth);
                 carve = Math.max(carve, depth);
             } else {
-                cut = Math.min(cut, w + bank + Math.max(0f, d - floodplain) * WALL_SLOPE);
+                cut = Math.min(cut, w + bank + beyond * beyond / (2f * v[o + 4]));
                 held = Math.max(held, w - (d - halfWidth));
             }
         }
