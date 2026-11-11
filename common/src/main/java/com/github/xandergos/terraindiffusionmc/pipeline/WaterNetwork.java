@@ -50,6 +50,10 @@ public final class WaterNetwork {
     // A channel runs on into the sea floor down to this depth
     private static final float MOUTH_FADE_BLOCKS = 6f;
 
+    // At the outer edge of its shore a lake covers only ground this many blocks below its water, and less the
+    // nearer its open water, so its waterline follows the ground across the shore and never the shore's edge
+    private static final float LAKE_SHORE_BLOCKS = 4f;
+
     private static final float LAKE_DEPTH_GAIN = 1.9f;
     private static final float LAKE_MIN_BED_BLOCKS = 4f;
     private static final float LAKE_MAX_BED_BLOCKS = 17f;
@@ -132,8 +136,11 @@ public final class WaterNetwork {
         return 0.5f * widthM * (1f + WIDTH_VARIATION) * (1f + BEND_SPREAD) * (1f + BAR_SPREAD) + valleyM;
     }
 
+    // lakeShore is how far out across its lake's shore the column lies, from nothing in the lake's open water to
+    // one at the shore's outer edge
     public static void sample(int worldX, int worldZ, float elevM, float smoothElevM, Reaches rivers,
-                              float lakeLevelM, float lakeDeepM, float metersPerBlock, Sample out) {
+                              float lakeLevelM, float lakeDeepM, float lakeShore, float metersPerBlock,
+                              Sample out) {
         out.bedElevM = elevM;
         out.waterSurfaceM = NO_WATER;
         out.levelM = NO_WATER;
@@ -171,10 +178,13 @@ public final class WaterNetwork {
                 surfaceM = water(levelM, metersPerBlock);
             }
         }
-        // A lake's water stands at the whole block below its level and covers all ground below that level, so it
-        // fills the basin its rivers drain into
+        // A lake's water stands at the whole block below its level and covers the ground below that level, so it
+        // fills the basin its rivers drain into. A river's channel fades out over the inner half of the lake's
+        // shore, as it does into the sea.
         boolean inBasin = lakeLevelM > NO_WATER;
         float lakeSurfaceM = inBasin ? water(lakeLevelM, metersPerBlock) : NO_WATER;
+        float lakeCoversM = lakeSurfaceM - lakeShore * LAKE_SHORE_BLOCKS * metersPerBlock;
+        float channelFade = inBasin ? Math.min(1f, 2f * lakeShore) : 1f;
         float groundM = elevM + (smoothElevM - elevM) * (inBasin ? 1f : near);
         float channelBed = Float.MAX_VALUE, carve = 0f;
         float cut = Float.MAX_VALUE, held = -Float.MAX_VALUE;
@@ -193,7 +203,7 @@ public final class WaterNetwork {
                 float shape = out01 <= CHANNEL_FLAT_FRACTION ? 1f
                         : fadeOut((out01 - CHANNEL_FLAT_FRACTION) / (1f - CHANNEL_FLAT_FRACTION));
                 float island = BAR_SHARE * bar * halfWidth - barMargin;
-                float depth = Math.max(minDepth, v[o + 3]) * (1f + BEND_POOL * Math.abs(v[o + 5])) * shape
+                float depth = Math.max(minDepth, v[o + 3] * channelFade) * (1f + BEND_POOL * Math.abs(v[o + 5])) * shape
                         * (1f - fadeOut((d - island) / barMargin));
                 channelBed = Math.min(channelBed, w - depth + bank * clamp01((island - d) / barMargin));
                 carve = Math.max(carve, depth);
@@ -220,7 +230,13 @@ public final class WaterNetwork {
             }
         }
 
-        float here = inBasin ? lakeLevelM - groundM : 0f;
+        // A lake covers the ground lying below its water and any channel that runs across its shore; the rest of
+        // its shore stands a bank above it, so its water never has lower ground beside it
+        boolean covered = inBasin && (bed < lakeCoversM || surfaceM > NO_WATER && bed < lakeSurfaceM);
+        if (inBasin && !covered) {
+            bed = Math.max(bed, lakeSurfaceM + bank);
+        }
+        float here = covered ? lakeLevelM - groundM : 0f;
         if (here > 0f) {
             float t = clamp01(here / lakeDeepM);
             t = t * t * (3f - 2f * t);
@@ -235,7 +251,7 @@ public final class WaterNetwork {
             out.waterSurfaceM = surfaceM;
             out.levelM = levelM;
         }
-        if (inBasin && bed < lakeSurfaceM && lakeSurfaceM > out.waterSurfaceM) {
+        if (covered && lakeSurfaceM > out.waterSurfaceM) {
             out.waterSurfaceM = lakeSurfaceM;
             out.levelM = lakeLevelM;
             out.lake = true;

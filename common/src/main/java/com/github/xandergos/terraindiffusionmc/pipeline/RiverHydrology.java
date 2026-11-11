@@ -81,9 +81,14 @@ public final class RiverHydrology {
 
     private static final int LAKE_MIN_LANDMASS_CELLS = 20000;
 
-    // A river reaches the sea where the ground below sea level lies this many cells from any dry ground. Before
-    // that, in a puddle, a creek or the shallows along a coast, it runs on in a channel of its own width.
+    // A river reaches the sea where the ground below sea level lies this many cells from any dry ground, and a
+    // lake where the lake lies this many blocks deep. Before that, in a puddle, a creek, the shallows along a
+    // shore or the floor of a basin filled less than a block deep, it runs on in a channel of its own width.
     private static final float OPEN_SEA_CELLS = 4f;
+    private static final float OPEN_LAKE_BLOCKS = 1.5f;
+
+    // Cells from a lake's open water to the outer edge of its shore
+    private static final float LAKE_SHORE_CELLS = 8f;
 
     public static final class Region {
         final int regionI, regionJ;
@@ -94,6 +99,8 @@ public final class RiverHydrology {
         volatile RiverNetwork drawn;
         final float[] lake;
         final float[] lakeDeep;
+        // Cells from each cell to the nearest open water of a lake, as far as the outer edge of a lake's shore
+        final float[] lakeShore;
         final KarstNetwork karst;
         // 8-connected lake body of each crop cell, -1 where there is no lake
         final int[] lakeBody;
@@ -101,13 +108,14 @@ public final class RiverHydrology {
         final byte[] bodyVerdict;
 
         Region(int regionI, int regionJ, RiverNetwork.Traced traced, float[] lake, float[] lakeDeep,
-               KarstNetwork karst) {
+               float[] lakeShore, KarstNetwork karst) {
             this.regionI = regionI;
             this.regionJ = regionJ;
             this.traced = traced;
             this.own = traced.own(regionI, regionJ, REGION_PX);
             this.lake = lake;
             this.lakeDeep = lakeDeep;
+            this.lakeShore = lakeShore;
             this.karst = karst;
             this.lakeBody = labelLakes(lake);
             this.bodyVerdict = new byte[Arrays.stream(lakeBody).max().orElse(-1) + 1];
@@ -362,7 +370,16 @@ public final class RiverHydrology {
             return null;
         }
         float deep = Float.isNaN(region.lakeDeep[at]) ? 0f : region.lakeDeep[at];
-        return new float[]{near, deep};
+        // How far out across its lake's shore the point lies, from nothing in open water to one at the shore's
+        // outer edge, between the centres of the cells around it
+        float si = gi - 0.5f, sj = gj - 0.5f;
+        int a = Math.max(0, Math.min(CROP_N - 2, (int) Math.floor(si)));
+        int b = Math.max(0, Math.min(CROP_N - 2, (int) Math.floor(sj)));
+        float[] shore = region.lakeShore;
+        int k = a * CROP_N + b;
+        float out = lerp(lerp(shore[k], shore[k + 1], sj - b), lerp(shore[k + CROP_N], shore[k + CROP_N + 1], sj - b),
+                si - a);
+        return new float[]{near, deep, out / LAKE_SHORE_CELLS};
     }
 
     private static int[] landmassArea(float[] elev) {
@@ -648,13 +665,16 @@ public final class RiverHydrology {
         int[] down = drained.down;
         float[] acc = drained.acc;
 
-        // Where rivers end: the sea, a lake, or the bottom of a basin too dry to hold one
-        boolean[] outlet = new boolean[GRID * GRID];
+        // Where rivers end: the sea, the open water of a lake, or the bottom of a basin too dry to hold one
+        boolean[] outlet = new boolean[GRID * GRID], openLake = new boolean[GRID * GRID];
         float[] outletLevel = new float[GRID * GRID];
         for (int i = 0; i < GRID * GRID; i++) {
-            outlet[i] = sink[i] || drained.basin[i] >= 0;
+            outlet[i] = sink[i] || drained.basin[i] >= 0 && lake[i] - elev[i] >= OPEN_LAKE_BLOCKS * blockM;
             outletLevel[i] = below[i] ? 0f : Float.isNaN(lake[i]) ? elev[i] : lake[i];
+            openLake[i] = outlet[i] && !Float.isNaN(lake[i]);
         }
+        float[] lakeShore = distanceTo(openLake);
+        for (int i = 0; i < GRID * GRID; i++) lakeShore[i] = Math.min(lakeShore[i], LAKE_SHORE_CELLS);
 
         boolean[] channel = new boolean[GRID * GRID];
         float[] filled = new float[GRID * GRID];
@@ -675,7 +695,7 @@ public final class RiverHydrology {
         KarstNetwork karst = KarstHydrology.solve(regionI, regionJ, windowI, windowJ, GRID,
                 elev, acc, channel, fillDepth, level, lake, REGION_PX, MARGIN_PX, blockM);
         InfiniteTensor.throwIfCancelled();
-        return new Region(regionI, regionJ, traced, crop(lake), crop(lakeDeep), karst);
+        return new Region(regionI, regionJ, traced, crop(lake), crop(lakeDeep), crop(lakeShore), karst);
     }
 
     // Cells from each cell to the nearest target cell
