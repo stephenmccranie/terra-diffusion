@@ -53,11 +53,11 @@ final class RiverNetwork {
     }
 
     // A river's width and depth at its head; downstream they grow as powers of its discharge, width as its square
-    // root (Leopold and Maddock 1953). At 7.5 m a block a river is as many blocks wide as a real river carrying its
-    // water is metres (about 7 m times the root of its mean flow in cubic metres a second): true to someone on its
-    // bank, though wider than its scaled valley. It is deeper than real, so boats and swimmers have water.
-    private static final float STREAM_WIDTH_M = 60f;
-    private static final float STREAM_DEPTH_M = 11f;
+    // root (Leopold and Maddock 1953). At 7.5 m a block a river is as many blocks wide as a real river carrying
+    // twice its water is metres (about 7 m times the root of its mean flow in cubic metres a second), so boats have
+    // room on all but its headwaters: wider than its scaled valley, and deeper than real.
+    private static final float STREAM_WIDTH_M = 85f;
+    private static final float STREAM_DEPTH_M = 14.5f;
     private static final float WIDTH_Q_EXPONENT = 0.5f;
     private static final float DEPTH_Q_EXPONENT = 0.4f;
 
