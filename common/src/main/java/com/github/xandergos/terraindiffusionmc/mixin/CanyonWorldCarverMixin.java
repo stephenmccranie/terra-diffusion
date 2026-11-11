@@ -17,17 +17,29 @@ import net.minecraft.world.level.levelgen.carver.CanyonWorldCarver;
 import net.minecraft.world.level.levelgen.heightproviders.HeightProvider;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/** Ravines start at heights measured from the land; see {@link CarvedCaves}. */
+/** Ravines start at heights measured from the land, and fewer of them are carved; see {@link CarvedCaves}. */
 @Mixin(CanyonWorldCarver.class)
 public abstract class CanyonWorldCarverMixin {
-    @Redirect(method = "carve(Lnet/minecraft/world/level/levelgen/carver/CarvingContext;"
+    private static final String CARVE = "carve(Lnet/minecraft/world/level/levelgen/carver/CarvingContext;"
             + "Lnet/minecraft/world/level/levelgen/carver/CanyonCarverConfiguration;"
             + "Lnet/minecraft/world/level/chunk/ChunkAccess;Ljava/util/function/Function;"
             + "Lnet/minecraft/util/RandomSource;Lnet/minecraft/world/level/levelgen/Aquifer;"
-            + "Lnet/minecraft/world/level/ChunkPos;Lnet/minecraft/world/level/chunk/CarvingMask;)Z",
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/world/level/levelgen/heightproviders/HeightProvider;"
+            + "Lnet/minecraft/world/level/ChunkPos;Lnet/minecraft/world/level/chunk/CarvingMask;)Z";
+
+    @Inject(method = CARVE, at = @At("HEAD"), cancellable = true)
+    private void terrainDiffusion$fewerRavines(CarvingContext context, CanyonCarverConfiguration config,
+                                               ChunkAccess chunk, Function<BlockPos, Holder<Biome>> biomeAccessor,
+                                               RandomSource random, Aquifer aquifer, ChunkPos chunkPos,
+                                               CarvingMask carvingMask, CallbackInfoReturnable<Boolean> carved) {
+        if (!CarvedCaves.ravineCarved(context, random)) carved.setReturnValue(false);
+    }
+
+    @Redirect(method = CARVE, at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/level/levelgen/heightproviders/HeightProvider;"
                     + "sample(Lnet/minecraft/util/RandomSource;Lnet/minecraft/world/level/levelgen/WorldGenerationContext;)I"))
     private int terrainDiffusion$startFromTheLand(HeightProvider height, RandomSource heightRandom,
                                                   WorldGenerationContext heightContext, CarvingContext context,
