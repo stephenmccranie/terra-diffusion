@@ -548,7 +548,8 @@ public final class LocalTerrainProvider {
                 RiverHydrology.sampleRivers(pipeline, nativeI, nativeJ, metersPerBlock, rivers);
                 float[] lk = RiverHydrology.sampleLake(pipeline, nativeI, nativeJ, metersPerBlock);
                 WaterNetwork.sample((j1 + c) * coordScale, (i1 + r) * coordScale, ground[idx], smooth[idx], rivers,
-                        lk == null ? WaterNetwork.NO_WATER : lk[0], lk == null ? 0f : lk[1], metersPerBlock, sample);
+                        lk == null ? WaterNetwork.NO_WATER : lk[0], lk == null ? 0f : lk[1], lk == null ? 0f : lk[2],
+                        metersPerBlock, sample);
                 bed[idx] = sample.bedElevM;
                 water[idx] = sample.waterSurfaceM;
                 float level = sample.levelM / metersPerBlock;
