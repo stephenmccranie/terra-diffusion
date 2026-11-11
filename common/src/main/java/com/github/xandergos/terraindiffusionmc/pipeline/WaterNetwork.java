@@ -6,11 +6,10 @@ package com.github.xandergos.terraindiffusionmc.pipeline;
 // drawn down towards it, wholly beside the river and not at all at the valley's edge, so it keeps its own shape
 // at a lower height and meets the land beyond without a step. Ground already lower is left alone, so a river
 // crossing a plain does not mark it. Either bank wanders in and out on its own, so a river is nowhere a ribbon of
-// one width; in a bend the channel spreads, its deepest water lies towards the outside bank and a shoal slopes
-// up to the inside one; and where a broad river spreads widest it parts round a bar. A column inside a channel
-// takes the water of the nearest channel holding it and is carved to the
-// deepest channel at that level; any other column is drawn down by the river that leaves it lowest, and never
-// left below the water of a channel beside it.
+// one width, and in a bend the channel spreads, its deepest water lies towards the outside bank and a shoal slopes
+// up to the inside one. A column inside a channel takes the water of the nearest channel holding it and is carved
+// to the deepest channel at that level; any other column is drawn down by the river that leaves it lowest, and
+// never left below the water of a channel beside it.
 public final class WaterNetwork {
 
     public static final float NO_WATER = -1.0e9f;
@@ -29,14 +28,6 @@ public final class WaterNetwork {
     private static final float BEND_SPREAD = 0.25f;
     private static final float BEND_POOL = 0.4f;
     private static final float BEND_SHIFT = 0.5f;
-
-    // Where this noise runs high a channel spreads by up to this share and a bar rises in its middle, up to this
-    // share of the half-width to either side less this many blocks, so only a broad river holds one
-    private static final FastNoiseLite BARS = makeFnl(0x7B21, 1f / 160f, 1, 2f, 0.5f);
-    private static final float BAR_ONSET = 0.25f;
-    private static final float BAR_SPREAD = 0.6f;
-    private static final float BAR_SHARE = 0.4f;
-    private static final float BAR_MARGIN_BLOCKS = 3f;
 
     // Shallowest drawn channel, in blocks
     private static final float MIN_DEPTH_BLOCKS = 1.5f;
@@ -137,7 +128,7 @@ public final class WaterNetwork {
 
     // Farthest from its centreline a river of this width and valley reach shapes the ground, in metres
     static float reachM(float widthM, float valleyM) {
-        return 0.5f * widthM * (1f + WIDTH_VARIATION) * (1f + BEND_SPREAD) * (1f + BAR_SPREAD) + valleyM;
+        return 0.5f * widthM * (1f + WIDTH_VARIATION) * (1f + BEND_SPREAD) + valleyM;
     }
 
     // lakeShore is how far out across its lake's shore the column lies, from nothing in the lake's open water to
@@ -157,10 +148,7 @@ public final class WaterNetwork {
         }
 
         // Only a column near a river needs to know how the river spreads there
-        float bar = rivers.count == 0 ? 0f : clamp01((BARS.GetNoise(worldX, worldZ) - BAR_ONSET) / BAR_ONSET);
-        float widen = rivers.count == 0 ? 1f
-                : (1f + WIDTH_VARIATION * WIDTH_VAR.GetNoise(worldX, worldZ)) * (1f + BAR_SPREAD * bar);
-        float barMargin = BAR_MARGIN_BLOCKS * metersPerBlock;
+        float widen = rivers.count == 0 ? 1f : 1f + WIDTH_VARIATION * WIDTH_VAR.GetNoise(worldX, worldZ);
         float bank = BANK_BLOCKS * metersPerBlock;
         float minDepth = MIN_DEPTH_BLOCKS * metersPerBlock;
         float[] v = rivers.v;
@@ -207,16 +195,14 @@ public final class WaterNetwork {
             if (d < halfWidth) {
                 if (Math.abs(w - surfaceM) > 0.5f * metersPerBlock) continue;
                 // The bed is level about its deepest line and rises from there to either bank, the farther bank
-                // the more gently; over a bar it rises to a bank in midstream
+                // the more gently
                 float across = d / halfWidth, deepest = BEND_SHIFT * v[o + 5];
                 float out01 = across >= deepest ? (across - deepest) / (1f - deepest)
                         : (deepest - across) / (1f + deepest);
                 float shape = out01 <= CHANNEL_FLAT_FRACTION ? 1f
                         : fadeOut((out01 - CHANNEL_FLAT_FRACTION) / (1f - CHANNEL_FLAT_FRACTION));
-                float island = BAR_SHARE * bar * halfWidth - barMargin;
-                float depth = Math.max(minDepth, v[o + 3] * channelFade) * (1f + BEND_POOL * Math.abs(v[o + 5])) * shape
-                        * (1f - fadeOut((d - island) / barMargin));
-                channelBed = Math.min(channelBed, w - depth + (bankM - w) * clamp01((island - d) / barMargin));
+                float depth = Math.max(minDepth, v[o + 3] * channelFade) * (1f + BEND_POOL * Math.abs(v[o + 5])) * shape;
+                channelBed = Math.min(channelBed, w - depth);
                 carve = Math.max(carve, depth);
             } else {
                 float kept = 1f - fadeOut((d - halfWidth) / v[o + 4]);
