@@ -54,6 +54,10 @@ public final class WaterNetwork {
     // nearer its open water, so its waterline follows the ground across the shore and never the shore's edge
     private static final float LAKE_SHORE_BLOCKS = 4f;
 
+    // Share of the way out across its shore that a lake fills the channels crossing it and keeps a bank above
+    // itself; beyond, a channel runs at its own level and the bank eases down
+    private static final float LAKE_HELD_SHARE = 0.75f;
+
     private static final float LAKE_DEPTH_GAIN = 1.9f;
     private static final float LAKE_MIN_BED_BLOCKS = 4f;
     private static final float LAKE_MAX_BED_BLOCKS = 17f;
@@ -185,6 +189,10 @@ public final class WaterNetwork {
         float lakeSurfaceM = inBasin ? water(lakeLevelM, metersPerBlock) : NO_WATER;
         float lakeCoversM = lakeSurfaceM - lakeShore * LAKE_SHORE_BLOCKS * metersPerBlock;
         float channelFade = inBasin ? Math.min(1f, 2f * lakeShore) : 1f;
+        // The shore a lake leaves dry stands a bank above it, easing down over the shore's outer part to what the
+        // lake would cover at its edge, so it ends without a step
+        float lakeBankM = lakeSurfaceM + bank - clamp01((lakeShore - LAKE_HELD_SHARE) / (1f - LAKE_HELD_SHARE))
+                * (LAKE_SHORE_BLOCKS * metersPerBlock + bank);
         float groundM = elevM + (smoothElevM - elevM) * (inBasin ? 1f : near);
         float channelBed = Float.MAX_VALUE, carve = 0f;
         float cut = Float.MAX_VALUE, held = -Float.MAX_VALUE;
@@ -223,18 +231,19 @@ public final class WaterNetwork {
         if (surfaceM > NO_WATER) {
             bed = Math.min(groundM, channelBed);
         } else {
-            // A lake's shore keeps a bank above the lake, whatever river runs below it
-            bed = Math.min(groundM, Math.max(cut, lakeSurfaceM + bank));
+            // Whatever river runs below a lake leaves the lake's shore standing
+            bed = Math.min(groundM, Math.max(cut, lakeBankM));
             if (!inBasin) {
                 bed = Math.max(bed, held);
             }
         }
 
-        // A lake covers the ground lying below its water and any channel that runs across its shore; the rest of
-        // its shore stands a bank above it, so its water never has lower ground beside it
-        boolean covered = inBasin && (bed < lakeCoversM || surfaceM > NO_WATER && bed < lakeSurfaceM);
-        if (inBasin && !covered) {
-            bed = Math.max(bed, lakeSurfaceM + bank);
+        // A lake covers the ground lying below its water, and a channel as far out across its shore as it keeps
+        // its bank; the rest of its shore stands above it, so its water has no lower ground beside it
+        boolean covered = inBasin && (surfaceM > NO_WATER ? bed < lakeSurfaceM && lakeShore < LAKE_HELD_SHARE
+                : bed < lakeCoversM);
+        if (inBasin && !covered && surfaceM <= NO_WATER) {
+            bed = Math.max(bed, lakeBankM);
         }
         float here = covered ? lakeLevelM - groundM : 0f;
         if (here > 0f) {
