@@ -271,6 +271,26 @@ public final class LocalTerrainProvider {
         return pipeline.seaLevelTemperature(i1, j1, i2, j2);
     }
 
+    // The river lines within reach blocks of column (x, z), each point as block x, block z, blocks of river above
+    // it and the river's half-width in blocks
+    public float[][] riverLines(int x, int z, int reach) {
+        float blockM = NATIVE_RESOLUTION / scale;
+        var lines = RiverHydrology.lines(pipeline, (z - reach) / (float) scale, (x - reach) / (float) scale,
+                (z + reach) / (float) scale, (x + reach) / (float) scale, blockM);
+        float[][] out = new float[lines.size()][];
+        for (int k = 0; k < out.length; k++) {
+            float[] line = lines.get(k);
+            float[] blocks = out[k] = new float[line.length];
+            for (int o = 0; o < line.length; o += RiverNetwork.LINE) {
+                blocks[o] = line[o + 1] * scale;
+                blocks[o + 1] = line[o] * scale;
+                blocks[o + 2] = line[o + 2] * scale;
+                blocks[o + 3] = 0.5f * line[o + 3] / blockM;
+            }
+        }
+        return out;
+    }
+
     private static final class LastTile {
         int generation = -1;
         HeightmapData tile;

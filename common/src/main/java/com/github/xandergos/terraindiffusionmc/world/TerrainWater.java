@@ -48,6 +48,14 @@ public final class TerrainWater {
         return y == HeightmapData.NO_WATER ? NO_WATER : y;
     }
 
+    // The lines of the rivers within reach blocks of column (x, z), each running downstream, as four floats a point:
+    // block x, block z, blocks of river above the point along its line, and the river's half-width in blocks. A
+    // line runs from a river's head to its mouth or to where it joins a larger river, whose line carries on through
+    // the join. Waits while the river regions it touches are built, so callers stay off the server thread.
+    public static float[][] riverLines(int x, int z, int reach) {
+        return LocalTerrainProvider.getInstance().riverLines(x, z, reach);
+    }
+
     public static int groundY(int x, int z) {
         HeightmapData tile = LocalTerrainProvider.tileAt(x, z);
         return tile.surfaceY[tile.index(x, z)];

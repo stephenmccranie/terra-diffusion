@@ -1,6 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
 import java.util.Arrays;
+import java.util.List;
 
 // The river centrelines a region draws, as segments between points along each river with the water level, width,
 // depth, valley reach and bend at both ends. A region draws the segments that start in it, so each stretch of
@@ -305,6 +306,71 @@ final class RiverNetwork {
             out.add(d, lerp(seg[o + 2], seg[o + END + 2], t), width, lerp(seg[o + 4], seg[o + END + 4], t), valley,
                     outside);
         }
+    }
+
+    // Floats per point of a line: native i and j, cells of river above the point, and the river's width in metres
+    static final int LINE = 4;
+
+    // A river's line keeps one point in this many, and its ends
+    private static final int LINE_STEP = 3;
+
+    // Adds the river lines that run within the native rectangle [i0, i1) x [j0, j1): runs of points down a river,
+    // each packed as LINE floats. A line follows each river from its head to its mouth or to where it joins a
+    // larger one, whose own line carries on through the join, so every stretch of water lies on one line.
+    void lines(float i0, float j0, float i1, float j1, List<float[]> out) {
+        int count = seg.length / STRIDE;
+        // The segment running into each segment that carries its river on: the widest of those that run into it
+        int[] main = new int[count];
+        Arrays.fill(main, -1);
+        for (int s = 0; s < count; s++) {
+            int t = next[s];
+            if (t >= 0 && (main[t] < 0 || seg[s * STRIDE + END + 3] > seg[main[t] * STRIDE + END + 3])) main[t] = s;
+        }
+        float[] points = new float[LINE * 64];
+        for (int head = 0; head < count; head++) {
+            if (main[head] >= 0) continue;
+            int n = 0;
+            float along = 0f;
+            for (int s = head, k = 0; ; s = next[s], k++) {
+                if ((n + 2) * LINE > points.length) points = Arrays.copyOf(points, points.length * 2);
+                int o = s * STRIDE;
+                if (k % LINE_STEP == 0) n = point(points, n, seg[o], seg[o + 1], along, seg[o + 3]);
+                along += (float) Math.hypot(seg[o + END] - seg[o], seg[o + END + 1] - seg[o + 1]);
+                if (next[s] < 0 || main[next[s]] != s) {
+                    n = point(points, n, seg[o + END], seg[o + END + 1], along, seg[o + END + 3]);
+                    break;
+                }
+            }
+            within(points, n, i0, j0, i1, j1, out);
+        }
+    }
+
+    private static int point(float[] points, int n, float i, float j, float along, float widthM) {
+        int o = n * LINE;
+        points[o] = i;
+        points[o + 1] = j;
+        points[o + 2] = along;
+        points[o + 3] = widthM;
+        return n + 1;
+    }
+
+    // Adds each run of a line's chords that touch the rectangle, as a line of its own
+    private static void within(float[] points, int n, float i0, float j0, float i1, float j1, List<float[]> out) {
+        int start = -1;
+        for (int c = 0; c + 1 < n; c++) {
+            boolean in = touches(points, c, i0, j0, i1, j1) || touches(points, c + 1, i0, j0, i1, j1);
+            if (in && start < 0) start = c;
+            if (start >= 0 && (!in || c + 2 == n)) {
+                int end = in ? c + 2 : c + 1;
+                out.add(Arrays.copyOfRange(points, start * LINE, end * LINE));
+                start = -1;
+            }
+        }
+    }
+
+    private static boolean touches(float[] points, int p, float i0, float j0, float i1, float j1) {
+        float i = points[p * LINE], j = points[p * LINE + 1];
+        return i >= i0 && i < i1 && j >= j0 && j < j1;
     }
 
     // How far along segment s the point (i, j) lies abreast of it: nothing at its upper end, one at its lower

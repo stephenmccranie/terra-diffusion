@@ -218,6 +218,18 @@ public final class RiverHydrology {
         }
     }
 
+    // The river lines that run within the native rectangle [i0, i1) x [j0, j1), each as RiverNetwork.LINE floats a
+    // point. Builds the regions it touches, which can take minutes, so callers stay off the server thread.
+    public static List<float[]> lines(WorldPipeline pipeline, float i0, float j0, float i1, float j1, float blockM) {
+        List<float[]> out = new ArrayList<>();
+        for (int ri = Math.floorDiv((int) Math.floor(i0), REGION_PX); ri <= Math.floorDiv((int) Math.floor(i1), REGION_PX); ri++) {
+            for (int rj = Math.floorDiv((int) Math.floor(j0), REGION_PX); rj <= Math.floorDiv((int) Math.floor(j1), REGION_PX); rj++) {
+                rivers(pipeline, ri, rj, blockM).lines(i0, j0, i1, j1, out);
+            }
+        }
+        return out;
+    }
+
     // The rivers a region draws: its own, and those it takes on from its neighbours' traces where they carry a river
     // over the line between them and it does not. Settled when the region is first sampled, from all eight
     // neighbours, so it comes out the same whoever asks first. Until then all nine regions are asked for before any
