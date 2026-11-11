@@ -111,15 +111,50 @@ final class RiverNetwork {
     private final int originI, originJ, side;
     // Segments of bucket b are members[first[b]] up to members[first[b + 1]]
     private final int[] first, members;
+    // The segment each segment's water runs on into, or -1 where it ends, and whether any segment runs into it
+    private final int[] next;
+    private final boolean[] fed;
+
+    // Joins are matched on points rounded to this many per cell
+    private static final float JOIN_GRID = 64f;
+
+    // Whether segment s + 1 carries on the river of segment s
+    private static boolean continues(float[] seg, int count, int s) {
+        int o = s * STRIDE;
+        return s + 1 < count && seg[o + END] == seg[o + STRIDE] && seg[o + END + 1] == seg[o + STRIDE + 1];
+    }
+
+    // The segment each segment's water runs on into: the next along its river, or where its river joins a larger
+    // one, the larger river's segment from the join, or -1 where it ends in standing water
+    private static int[] runsInto(float[] seg, int count) {
+        java.util.Map<Long, Integer> startAt = new java.util.HashMap<>();
+        for (int s = 0; s < count; s++) startAt.putIfAbsent(joinKey(seg[s * STRIDE], seg[s * STRIDE + 1], 0, 0), s);
+        int[] next = new int[count];
+        for (int s = 0; s < count; s++) {
+            next[s] = -1;
+            if (continues(seg, count, s)) {
+                next[s] = s + 1;
+                continue;
+            }
+            float i = seg[s * STRIDE + END], j = seg[s * STRIDE + END + 1];
+            for (int d = 0; d < 9 && next[s] < 0; d++) {
+                Integer t = startAt.get(joinKey(i, j, d / 3 - 1, d % 3 - 1));
+                if (t != null && t != s && Math.abs(seg[t * STRIDE] - i) < 1f / JOIN_GRID
+                        && Math.abs(seg[t * STRIDE + 1] - j) < 1f / JOIN_GRID) next[s] = t;
+            }
+        }
+        return next;
+    }
+
+    private static long joinKey(float i, float j, int di, int dj) {
+        return (long) (Math.round(i * JOIN_GRID) + di) << 32 ^ (Math.round(j * JOIN_GRID) + dj) & 0xFFFFFFFFL;
+    }
 
     // Every segment a region traced across its window, in order down each river, the region each lies in, as OWN for
     // the region itself or a code for the neighbour at row offset code / 3 - 1 and column offset code % 3 - 1, and
-    // the segment its water runs on into: the next along its river, or where its river joins a larger one, the
-    // larger river's segment from the join, or -1 where it ends in standing water
+    // the segment its water runs on into
     static final class Traced {
         static final byte OWN = 4;
-        // Joins are matched on points rounded to this many per cell
-        private static final float JOIN_GRID = 64f;
         final float[] seg;
         final byte[] region;
         final int[] next;
@@ -129,32 +164,7 @@ final class RiverNetwork {
             this.seg = seg;
             this.region = region;
             this.count = count;
-            java.util.Map<Long, Integer> startAt = new java.util.HashMap<>();
-            for (int s = 0; s < count; s++) startAt.putIfAbsent(joinKey(seg[s * STRIDE], seg[s * STRIDE + 1], 0, 0), s);
-            next = new int[count];
-            for (int s = 0; s < count; s++) {
-                next[s] = -1;
-                if (continues(s)) {
-                    next[s] = s + 1;
-                    continue;
-                }
-                float i = seg[s * STRIDE + END], j = seg[s * STRIDE + END + 1];
-                for (int d = 0; d < 9 && next[s] < 0; d++) {
-                    Integer t = startAt.get(joinKey(i, j, d / 3 - 1, d % 3 - 1));
-                    if (t != null && t != s && Math.abs(seg[t * STRIDE] - i) < 1f / JOIN_GRID
-                            && Math.abs(seg[t * STRIDE + 1] - j) < 1f / JOIN_GRID) next[s] = t;
-                }
-            }
-        }
-
-        private static long joinKey(float i, float j, int di, int dj) {
-            return (long) (Math.round(i * JOIN_GRID) + di) << 32 ^ (Math.round(j * JOIN_GRID) + dj) & 0xFFFFFFFFL;
-        }
-
-        // Whether segment s + 1 carries on the river of segment s
-        boolean continues(int s) {
-            int o = s * STRIDE;
-            return s + 1 < count && seg[o + END] == seg[o + STRIDE] && seg[o + END + 1] == seg[o + STRIDE + 1];
+            next = runsInto(seg, count);
         }
 
         // The segments that lie in the region itself
@@ -187,7 +197,7 @@ final class RiverNetwork {
                         && own.apart(from.seg, t * STRIDE); t = from.next[t]) {
                     taken[t] = true;
                 }
-                for (int t = s - 1; t >= 0 && from.continues(t) && from.region[t] == here && !taken[t]
+                for (int t = s - 1; t >= 0 && continues(from.seg, from.count, t) && from.region[t] == here && !taken[t]
                         && own.apart(from.seg, t * STRIDE + END); t--) {
                     taken[t] = true;
                 }
@@ -222,6 +232,9 @@ final class RiverNetwork {
 
     private RiverNetwork(float[] seg, int count, int regionI, int regionJ, int regionPx) {
         this.seg = Arrays.copyOf(seg, count * STRIDE);
+        next = runsInto(this.seg, count);
+        fed = new boolean[count];
+        for (int t : next) if (t >= 0) fed[t] = true;
         int reach = (int) Math.ceil(reachCells());
         originI = regionI * regionPx - reach;
         originJ = regionJ * regionPx - reach;
@@ -266,17 +279,22 @@ final class RiverNetwork {
         return 2f + MAX_MEANDER_CELLS + WaterNetwork.reachM(MAX_WIDTH_M, valley) / RiverHydrology.CELL_SIZE_M;
     }
 
-    // Adds the point nearest (i, j) of every segment whose river shapes the ground there
+    // Adds the point nearest (i, j) of every segment that shapes the ground there. A segment shapes what lies
+    // abreast of it. What lies above its upper end belongs to the river running into it, and what lies below its
+    // lower end to the river it runs into, but for the wedge that river leaves on the outside of a turn; so only
+    // a river's head and mouth are round, and no ground is drawn down to water lower than the water beside it.
     void gather(float i, float j, WaterNetwork.Reaches out) {
         int bi = (int) Math.floor((i - originI) / BUCKET), bj = (int) Math.floor((j - originJ) / BUCKET);
         if (bi < 0 || bj < 0 || bi >= side || bj >= side) return;
         int b = bi * side + bj;
         for (int m = first[b]; m < first[b + 1]; m++) {
-            int o = members[m] * STRIDE;
+            int s = members[m], o = s * STRIDE;
             float ai = seg[o], aj = seg[o + 1];
             float di = seg[o + END] - ai, dj = seg[o + END + 1] - aj;
-            float len2 = di * di + dj * dj;
-            float t = len2 > 0f ? Math.max(0f, Math.min(1f, ((i - ai) * di + (j - aj) * dj) / len2)) : 0f;
+            float along = along(s, i, j);
+            if (along < 0f && fed[s]) continue;
+            if (along > 1f && next[s] >= 0 && along(next[s], i, j) >= 0f) continue;
+            float t = Math.max(0f, Math.min(1f, along));
             float oi = ai + di * t - i, oj = aj + dj * t - j;
             float d = RiverHydrology.CELL_SIZE_M * (float) Math.sqrt(oi * oi + oj * oj);
             float width = lerp(seg[o + 3], seg[o + END + 3], t), valley = lerp(seg[o + 5], seg[o + END + 5], t);
@@ -287,6 +305,15 @@ final class RiverNetwork {
             out.add(d, lerp(seg[o + 2], seg[o + END + 2], t), width, lerp(seg[o + 4], seg[o + END + 4], t), valley,
                     outside);
         }
+    }
+
+    // How far along segment s the point (i, j) lies abreast of it: nothing at its upper end, one at its lower
+    private float along(int s, float i, float j) {
+        int o = s * STRIDE;
+        float ai = seg[o], aj = seg[o + 1];
+        float di = seg[o + END] - ai, dj = seg[o + END + 1] - aj;
+        float len2 = di * di + dj * dj;
+        return len2 > 0f ? ((i - ai) * di + (j - aj) * dj) / len2 : 0f;
     }
 
     private static float lerp(float a, float b, float t) {

@@ -201,6 +201,9 @@ public final class WaterNetwork {
             float d = v[o];
             float halfWidth = v[o + 2];
             float w = water(v[o + 1], metersPerBlock);
+            // The bank falls with the river's level, so the ground beside it steps down smoothly, and it always
+            // reaches the block above the water
+            float bankM = Math.max(v[o + 1] + bank, water(v[o + 1] + bank, metersPerBlock));
             if (d < halfWidth) {
                 if (Math.abs(w - surfaceM) > 0.5f * metersPerBlock) continue;
                 // The bed is level about its deepest line and rises from there to either bank, the farther bank
@@ -213,11 +216,11 @@ public final class WaterNetwork {
                 float island = BAR_SHARE * bar * halfWidth - barMargin;
                 float depth = Math.max(minDepth, v[o + 3] * channelFade) * (1f + BEND_POOL * Math.abs(v[o + 5])) * shape
                         * (1f - fadeOut((d - island) / barMargin));
-                channelBed = Math.min(channelBed, w - depth + bank * clamp01((island - d) / barMargin));
+                channelBed = Math.min(channelBed, w - depth + (bankM - w) * clamp01((island - d) / barMargin));
                 carve = Math.max(carve, depth);
             } else {
                 float kept = 1f - fadeOut((d - halfWidth) / v[o + 4]);
-                cut = Math.min(cut, w + bank + Math.max(0f, groundM - w - bank) * kept);
+                cut = Math.min(cut, bankM + Math.max(0f, groundM - bankM) * kept);
                 held = Math.max(held, w - (d - halfWidth));
             }
         }
