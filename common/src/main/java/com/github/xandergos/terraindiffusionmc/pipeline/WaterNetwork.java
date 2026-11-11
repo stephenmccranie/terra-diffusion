@@ -175,22 +175,23 @@ public final class WaterNetwork {
             return;
         }
 
+        // A lake's water stands at the whole block below its level and covers all ground below that level, so it
+        // fills the basin its rivers drain into
         boolean inBasin = lakeLevelM > NO_WATER;
+        float lakeSurfaceM = inBasin ? water(lakeLevelM, metersPerBlock) : NO_WATER;
         float groundM = elevM + (smoothElevM - elevM) * (inBasin ? 1f : near);
         float bed;
         if (surfaceM > NO_WATER) {
             bed = Math.min(groundM, channelBed);
         } else {
+            // A lake's shore keeps a bank above the lake, whatever river runs below it
             float rough = BANK_ROUGH.GetNoise(worldX, worldZ) * BANK_ROUGH_BLOCKS * metersPerBlock;
-            bed = Math.min(groundM, cut + rough);
+            bed = Math.min(groundM, Math.max(cut, lakeSurfaceM + bank) + rough);
             if (!inBasin) {
                 bed = Math.max(bed, held);
             }
         }
 
-        // A lake's water stands at the whole block below its level and covers all ground below that level, so it
-        // fills the basin its rivers drain into
-        float lakeSurfaceM = inBasin ? water(lakeLevelM, metersPerBlock) : NO_WATER;
         float here = inBasin ? lakeLevelM - groundM : 0f;
         if (here > 0f) {
             float t = clamp01(here / lakeDeepM);
