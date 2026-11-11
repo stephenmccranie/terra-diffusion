@@ -28,9 +28,10 @@ public final class WaterNetwork {
     // A river's bank lies this many blocks above its water
     private static final float BANK_BLOCKS = 1f;
 
-    // A valley side stands above the bank by the square of the distance beyond the channel over twice the river's
-    // footslope, so it is as steep as that distance over the footslope, and it cuts ground up to this many blocks
-    // above the bank
+    // A valley side rises as the square of the distance beyond the channel over twice the river's footslope, so it
+    // is as steep as that distance over the footslope. It ends where that rise comes to this many blocks, and
+    // steepens without limit as it nears its end, so ground standing higher than it can reach is drawn down to it
+    // and never cut off at a cliff.
     private static final float VALLEY_RISE_BLOCKS = 40f;
 
     private static final float BANK_ROUGH_BLOCKS = 0.9f;
@@ -133,6 +134,7 @@ public final class WaterNetwork {
 
         float widen = 1f + WIDTH_VARIATION * Math.max(0f, WIDTH_VAR.GetNoise(worldX, worldZ));
         float bank = BANK_BLOCKS * metersPerBlock;
+        float valleyRise = VALLEY_RISE_BLOCKS * metersPerBlock;
         float minDepth = MIN_DEPTH_BLOCKS * metersPerBlock;
         float[] v = rivers.v;
         float surfaceM = NO_WATER, levelM = NO_WATER, nearest = Float.MAX_VALUE;
@@ -162,7 +164,8 @@ public final class WaterNetwork {
                 channelBed = Math.min(channelBed, w - depth);
                 carve = Math.max(carve, depth);
             } else {
-                cut = Math.min(cut, w + bank + beyond * beyond / (2f * v[o + 4]));
+                float rise = beyond * beyond / (2f * v[o + 4]);
+                if (rise < valleyRise) cut = Math.min(cut, w + bank + rise / (1f - rise / valleyRise));
                 held = Math.max(held, w - (d - halfWidth));
             }
         }

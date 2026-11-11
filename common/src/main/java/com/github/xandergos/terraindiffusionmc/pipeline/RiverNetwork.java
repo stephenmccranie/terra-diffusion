@@ -19,8 +19,8 @@ final class RiverNetwork {
     // A river's footslope is the distance beyond its bank at which its valley side has steepened to one in one
     // (see WaterNetwork): this many of its half-widths where it falls STEEP_SLOPE or more, and this many more where
     // it runs flat, so a steep river runs in a ravine and a flat one in a broad valley
-    private static final float FOOT_WIDTHS_STEEP = 1f;
-    private static final float FOOT_WIDTHS_FLAT = 2f;
+    private static final float FOOT_WIDTHS_STEEP = 2f;
+    private static final float FOOT_WIDTHS_FLAT = 1f;
     private static final float STEEP_SLOPE = 0.02f;
 
     // Points on either side over which a river's fall is measured
