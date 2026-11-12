@@ -24,7 +24,8 @@
     "NoiseBasedChunkGeneratorSurfaceMixin",
     "OceanMonumentStructureMixin",
     "SnowAndFreezeFeatureMixin",
-    "StructureMixin"
+    "StructureMixin",
+    "WorldGenRegionMixin"
   ],
   "client": [],
   "server": [],
