@@ -20,6 +20,7 @@
       "com.github.xandergos.terraindiffusionmc.TerrainDiffusionMc"
     ]
   },
+  "accessWidener": "terrain-diffusion-mc.accesswidener",
   "mixins": [
     "terrain-diffusion-mc.mixins.json",
     {
