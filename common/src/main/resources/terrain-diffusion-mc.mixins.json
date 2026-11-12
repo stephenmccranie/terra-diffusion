@@ -11,8 +11,10 @@
     "CarvingContextMixin",
     "CaveWorldCarverMixin",
     "ChunkGeneratorStructureStateMixin",
+    "CountOnEveryLayerPlacementMixin",
     "DiskFeatureMixin",
     "HeightRangePlacementMixin",
+    "HeightmapMixin",
     "HolderReferenceAccessor",
     "LevelChunkSpillMixin",
     "MinecraftServerMixin",
@@ -20,9 +22,11 @@
     "NoiseBasedChunkGeneratorAccessor",
     "NoiseBasedChunkGeneratorFillMixin",
     "NoiseBasedChunkGeneratorFluidMixin",
+    "NoiseBasedChunkGeneratorSurfaceMixin",
     "OceanMonumentStructureMixin",
     "SnowAndFreezeFeatureMixin",
-    "StructureMixin"
+    "StructureMixin",
+    "WorldGenRegionMixin"
   ],
   "client": [],
   "server": [],

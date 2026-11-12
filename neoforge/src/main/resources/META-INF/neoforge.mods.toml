@@ -12,6 +12,9 @@ authors="${mod_author}"
 credits="${credits}"
 description='''${description}'''
 
+[[accessTransformers]]
+file="META-INF/accesstransformer.cfg"
+
 [[mixins]]
 config="${mod_id}.mixins.json"
 [[mixins]]

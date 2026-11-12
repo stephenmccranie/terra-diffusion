@@ -171,14 +171,14 @@ public final class TerralithSurfaceRules {
                                 SurfaceRules.ifTrue(SurfaceRules.noiseCondition(Noises.PATCH, 0.0), block(Blocks.MUD)),
                                 block(Blocks.DIRT))),
                 block(Blocks.GRAVEL));
-        SurfaceRules.RuleSource high = SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.isBiome(biomes(WATER_BEDS))),
+        // Stone under every floor asks these rules, so its depth, water and height are tested before the biome, which
+        // costs a lookup
+        SurfaceRules.RuleSource high = SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.waterBlockCheck(0, 0)),
                 SurfaceRules.ifTrue(SurfaceRules.yBlockCheck(stonyFrom, 0),
-                        SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.waterBlockCheck(0, 0)),
-                                SurfaceRules.ifTrue(SurfaceRules.UNDER_FLOOR, stony))));
-        SurfaceRules.RuleSource low = SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.isBiome(biomes(NATURAL_BEDS))),
+                        SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.isBiome(biomes(WATER_BEDS))), stony)));
+        SurfaceRules.RuleSource low = SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.waterBlockCheck(-2, 0)),
                 SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.yBlockCheck(stonyFrom, 0)),
-                        SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.waterBlockCheck(-2, 0)),
-                                SurfaceRules.ifTrue(SurfaceRules.UNDER_FLOOR, sand))));
-        return SurfaceRules.sequence(high, low);
+                        SurfaceRules.ifTrue(SurfaceRules.not(SurfaceRules.isBiome(biomes(NATURAL_BEDS))), sand)));
+        return SurfaceRules.ifTrue(SurfaceRules.UNDER_FLOOR, SurfaceRules.sequence(high, low));
     }
 }
