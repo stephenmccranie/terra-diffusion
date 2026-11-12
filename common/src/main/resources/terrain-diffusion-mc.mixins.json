@@ -13,6 +13,7 @@
     "ChunkGeneratorStructureStateMixin",
     "DiskFeatureMixin",
     "HeightRangePlacementMixin",
+    "HeightmapMixin",
     "HolderReferenceAccessor",
     "LevelChunkSpillMixin",
     "MinecraftServerMixin",
