@@ -8,7 +8,6 @@ import com.github.xandergos.terraindiffusionmc.world.HeightConverter;
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.Random;
-import java.util.Comparator;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -357,11 +356,13 @@ public final class LocalTerrainProvider {
         }
     }
 
+    // Other threads touch tiles while this sorts, so each access time is read once, before the sort
     private static void evictLruTo(int maxSize) {
         int headroomHalf = MAX_CACHE_SIZE_HEADROOM / 2;
         if (CACHE.size() > maxSize + headroomHalf) {
             CACHE.entrySet().stream()
-                .sorted(Comparator.comparingLong(e -> e.getValue().lastAccessed.get()))
+                .map(e -> Map.entry(e.getKey(), e.getValue().lastAccessed.get()))
+                .sorted(Map.Entry.comparingByValue())
                 .limit(MAX_CACHE_SIZE_HEADROOM)
                 .map(Map.Entry::getKey)
                 .forEach(CACHE::remove);

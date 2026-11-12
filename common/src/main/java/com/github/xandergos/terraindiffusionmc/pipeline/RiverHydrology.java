@@ -8,7 +8,6 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -616,12 +615,14 @@ public final class RiverHydrology {
         return region;
     }
 
+    // Lookups mark regions used while this sorts, so each mark is read once, before the sort
     private static void evict(RegionCache cache) {
         if (cache.regions.size() <= MAX_CACHED_REGIONS) {
             return;
         }
         cache.used.entrySet().stream()
-                .sorted(Comparator.comparingLong(e -> e.getValue().get()))
+                .map(e -> Map.entry(e.getKey(), e.getValue().get()))
+                .sorted(Map.Entry.comparingByValue())
                 .limit(Math.max(1, cache.regions.size() - MAX_CACHED_REGIONS))
                 .map(Map.Entry::getKey)
                 .forEach(k -> { cache.regions.remove(k); cache.used.remove(k); });
